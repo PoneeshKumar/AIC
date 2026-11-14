@@ -36,7 +36,7 @@ def ledger_matches_world(run_id: str) -> list[str]:
     sid = None
     for s in steps:
         sid = sid or s.get("request", {}).get("shipment_id")
-    run = get_db()[config.RUNS].find_one({"run_id": run_id}) or get_db()[config.RUNS].find_one({"_id": run_id}) or {}
+    run = get_db()[config.RUNS].find_one({"run_id": run_id}) or {}
     sid = sid or run.get("shipment_id", "BIO-2048")
     world = {
         "warehouse": {r["idempotency_key"] for r in _get(config.WAREHOUSE_URL + "/reservations", shipment_id=sid)},
@@ -55,12 +55,11 @@ def ledger_matches_world(run_id: str) -> list[str]:
 
 
 def budget_respected(run_id: str) -> bool:
-    """The shipment never ran out of excursion budget."""
+    """The chosen plan left a non-negative excursion budget. Fails closed if the run has no figure."""
     from core.db import get_db
-    db = get_db()
-    run = db[config.RUNS].find_one({"run_id": run_id}) or db[config.RUNS].find_one({"_id": run_id}) or {}
-    ship = db[config.SHIPMENTS].find_one({"shipment_id": run.get("shipment_id", "BIO-2048")}) or {}
-    return ship.get("budget_remaining_min", 1) >= 0
+    run = get_db()[config.RUNS].find_one({"run_id": run_id}) or {}
+    left = run.get("budget_after_minutes")
+    return left is not None and left >= 0
 
 
 def check_all(run_id: str, shipment_id: str = "BIO-2048") -> dict:

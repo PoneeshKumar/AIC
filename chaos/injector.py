@@ -48,9 +48,9 @@ def _log(run_id: str, message: str, data: dict):
 
 def _kill_agent() -> dict:
     db = get_db()
-    w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)])
+    w = db[config.WORKERS].find_one({"pid": {"$exists": True}, "alive": True}, sort=[("heartbeat", -1)])
     if not w:
-        raise RuntimeError("no worker with a pid in `workers`")
+        raise RuntimeError("no alive worker with a pid in `workers`")
     try:
         os.kill(int(w["pid"]), signal.SIGKILL)
     except ProcessLookupError:
