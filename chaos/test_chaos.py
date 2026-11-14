@@ -34,7 +34,9 @@ def test_duplicates(monkeypatch):
 
 class FakeColl:
     def __init__(self, docs): self.docs = docs
-    def find(self, q): return [d for d in self.docs if all(d.get(k) == v for k, v in q.items())]
+    def find(self, q):
+        ok = lambda d, k, v: (k in d) == v["$exists"] if isinstance(v, dict) else d.get(k) == v  # only $exists supported
+        return [d for d in self.docs if all(ok(d, k, v) for k, v in q.items())]
     def find_one(self, q=None, sort=None):
         r = self.find(q or {})
         return r[-1] if r else None
@@ -67,7 +69,7 @@ def test_kill_agent(monkeypatch):
     import subprocess, core.db
     from chaos import injector
     victim = subprocess.Popen(["sleep", "60"])
-    monkeypatch.setattr(core.db, "get_db", lambda: FakeDB(workers=FakeColl([
+    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(workers=FakeColl([
         {"pid": 1, "alive": False}, {"pid": victim.pid, "alive": True}])))
     monkeypatch.setattr(injector.time, "sleep", lambda s: None)
     spawned = []
