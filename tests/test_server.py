@@ -74,6 +74,21 @@ def test_unbuilt_and_unknown_chaos_fail_clearly(ui):
     assert ui.post("/chaos/meteor").status_code == 404
 
 
+def test_network_follows_the_carrier_and_warehouse(ui):
+    net = ui.get("/network").json()
+    by_id = {r["route_id"]: r for r in net["routes"]}
+    assert by_id["R-DIRECT"]["status"] == "available" and by_id["R-DIRECT"]["original"]
+    assert by_id["R-YYC"]["exposed_min"] == 0, "Calgary has a free bay, so its layover is covered"
+    assert by_id["R-YWG"]["exposed_min"] == 210, "Winnipeg has no free bay"
+    assert set(net["airports"]) == {"YYZ", "YWG", "YYC", "YEG", "YVR"}
+
+    ui.post("/chaos/cancel_flight")
+    MOCKS["carrier"].post("/bookings", json={"shipment_id": "BIO-2048", "route_id": "R-YYC"}, headers={"Idempotency-Key": "b1"})
+    by_id = {r["route_id"]: r for r in ui.get("/network").json()["routes"]}
+    assert by_id["R-DIRECT"]["status"] == "cancelled"
+    assert by_id["R-YYC"]["status"] == "booked"
+
+
 def test_approve_needs_atlas(ui):
     assert ui.post("/approve", json={"proposal_id": "0" * 24}).status_code == 503
 

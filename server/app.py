@@ -163,6 +163,62 @@ def state():
     }
 
 
+# Airport coordinates for the map. Public reference positions, rounded.
+AIRPORTS = {
+    "YYZ": {"name": "Toronto", "lat": 43.678, "lon": -79.625},
+    "YWG": {"name": "Winnipeg", "lat": 49.910, "lon": -97.240},
+    "YYC": {"name": "Calgary", "lat": 51.122, "lon": -114.008},
+    "YEG": {"name": "Edmonton", "lat": 53.310, "lon": -113.580},
+    "YVR": {"name": "Vancouver", "lat": 49.195, "lon": -123.178},
+}
+
+
+@app.get("/network")
+def network():
+    """Routes, storage and what the carrier still offers, for the map and the route chart.
+
+    Not part of /state on purpose: it changes rarely, so the page asks every few seconds.
+    exposed_min is a display estimate (uncooled legs, minus layovers a free qualified bay could cover).
+    The planner stays the authority on which route is chosen.
+    """
+    seeded = _seed_shipment()
+    origin, dest = seeded["origin"], seeded["destination"]
+    up, offered = _read("carrier", "/routes", origin=origin, dest=dest)
+    offered_ids = {r["route_id"] for r in offered} if up and offered is not None else None
+    _, bookings = _read("carrier", "/bookings", shipment_id=seeded["shipment_id"])
+    booked = (bookings or [{}])[-1].get("route_id")
+
+    routes, bays = [], {}
+    for r in seed("routes.json")["routes"]:
+        legs, exposed, total = [], 0, 0
+        for leg in r["legs"]:
+            kind = "layover" if "layover_city" in leg else ("truck" if "truck" in leg else "flight")
+            covered = False
+            if kind == "layover" and not leg["cooled"]:
+                city = leg["layover_city"]
+                if city not in bays:
+                    _, cap = _read("warehouse", "/capacity", city=city)
+                    bays[city] = sum(w["bays_free"] for w in (cap or []) if w.get("qualified_2_8c"))
+                covered = bays[city] > 0
+            if not leg["cooled"] and not covered:
+                exposed += leg["duration_min"]
+            total += leg["duration_min"]
+            legs.append({"kind": kind, "flight": leg.get("flight"), "from": leg.get("from", leg.get("layover_city")),
+                         "to": leg.get("to", leg.get("layover_city")), "duration_min": leg["duration_min"],
+                         "cooled": leg["cooled"], "storage_covered": covered})
+        status = "unknown" if offered_ids is None else ("booked" if r["route_id"] == booked else
+                                                         "available" if r["route_id"] in offered_ids else "cancelled")
+        routes.append({"route_id": r["route_id"], "legs": legs, "total_min": total, "exposed_min": exposed,
+                       "status": status, "original": r["route_id"] == seeded["original_route_id"]})
+
+    stops = {a for r in routes for l in r["legs"] for a in (l["from"], l["to"])}
+    return {"origin": origin, "destination": dest, "booked_route_id": booked,
+            "budget_total_min": seeded["excursion_budget_minutes"], "product": seeded.get("product"),
+            "consignee": seeded.get("consignee"), "temp_range_c": seeded.get("temp_range_c"),
+            "airports": {k: v for k, v in AIRPORTS.items() if k in stops},
+            "storage": [{"city": c, "bays_free": n} for c, n in bays.items()], "routes": routes}
+
+
 def _proposal_view(p):
     if not p:
         return None

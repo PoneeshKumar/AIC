@@ -4,95 +4,162 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ColdTrace</title>
+<link rel="stylesheet" href="/ui/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
-<!-- Owner: UI. Plain HTML, no build step. Renders GET /state once a second. Add ?preview to play sample data. -->
-<div class="banner preview" id="preview-banner" hidden>Preview with sample data. Nothing here is connected to the agent or the mock systems.</div>
-<div class="banner warn" id="stale-banner" hidden></div>
-<div class="banner error" id="error-banner" hidden>Cannot reach the ColdTrace server. Retrying every second.</div>
+<!-- Owner: UI. Plain HTML, no build step. Polls GET /state every second and GET /network every 3 seconds. Add ?preview for sample data. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-plane" viewBox="0 0 24 24"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></symbol>
+    <symbol id="i-snow" viewBox="0 0 24 24"><path d="M12 2v20"/><path d="m4.9 7 14.2 10"/><path d="m4.9 17 14.2-10"/><path d="m9 4 3 2 3-2"/><path d="m9 20 3-2 3 2"/></symbol>
+  </defs>
+</svg>
 
-<header class="top">
-  <div class="brand">
-    <span class="logo" aria-hidden="true">❄</span>
-    <div>
-      <h1>ColdTrace</h1>
-      <p class="sub">Shipment <strong id="shipment-id">--</strong> <span class="pill" id="shipment-status">connecting</span></p>
-    </div>
+<header class="appbar">
+  <div class="appbar-left">
+    <svg class="mark" aria-hidden="true"><use href="#i-snow"/></svg>
+    <span class="product">ColdTrace</span>
+    <span class="divider"></span>
+    <span class="section">Recovery console</span>
   </div>
-  <div class="live" id="live"><span class="dot"></span><span id="live-text">Connecting</span></div>
+  <div class="appbar-right">
+    <span class="env">Simulated environment</span>
+    <span class="live" id="live"><span class="dot"></span><span id="live-text">Connecting</span></span>
+  </div>
 </header>
 
-<main>
-  <section class="tiles" aria-label="Key numbers">
-    <div class="tile" id="budget-tile">
-      <div class="label">Budget remaining</div>
-      <div class="value" id="budget">--</div>
-      <div class="hint">Time the shipment can still spend out of its temperature range</div>
+<div class="notice info" id="preview-banner" hidden>Preview with sample data. Nothing on this screen is connected to the agent or the mock systems.</div>
+<div class="notice warn" id="stale-banner" hidden></div>
+<div class="notice error" id="error-banner" hidden>Cannot reach the ColdTrace server. Retrying every second.</div>
+
+<div class="context">
+  <div class="context-inner">
+    <div class="shipment">
+      <div class="shipment-line">
+        <h1 id="shipment-id">Shipment</h1>
+        <span class="badge" id="shipment-status">Loading</span>
+      </div>
+      <div class="shipment-meta" id="shipment-meta">&nbsp;</div>
     </div>
-    <div class="tile" id="dupes-tile">
-      <div class="label">Duplicate actions</div>
-      <div class="value" id="dupes">--</div>
-      <div class="hint" id="dupes-hint">Counted from the warehouse and carrier, not from the agent</div>
+    <div class="scenario" role="group" aria-label="Scenario controls">
+      <span class="scenario-label">Inject failure</span>
+      <button class="btn" data-event="cancel_flight"><svg><use href="#i-plane"/></svg>Cancel flight</button>
+      <button class="btn" data-event="kill_agent"><svg><use href="#i-power"/></svg>Kill agent</button>
+      <button class="btn" data-event="change_carrier"><svg><use href="#i-swap"/></svg>Change carrier API</button>
+      <button class="btn" data-event="random"><svg><use href="#i-shuffle"/></svg>Random</button>
     </div>
-    <div class="tile">
-      <div class="label">Steps confirmed</div>
-      <div class="value" id="verified">--</div>
-      <div class="bar"><span id="verified-bar"></span></div>
-      <div class="hint">A step counts only after the other system confirms it</div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+
+<main class="layout">
+  <section class="kpis" aria-label="Key figures">
+    <div class="kpi" id="kpi-budget">
+      <div class="kpi-label">Excursion budget remaining</div>
+      <div class="kpi-value" id="budget">--</div>
+      <div class="meter"><span id="budget-meter"></span></div>
+      <div class="kpi-foot" id="budget-foot">&nbsp;</div>
+    </div>
+    <div class="kpi" id="kpi-dupes">
+      <div class="kpi-label">Duplicate actions</div>
+      <div class="kpi-value" id="dupes">--</div>
+      <div class="kpi-foot" id="dupes-foot">Counted from the warehouse and carrier</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Steps confirmed</div>
+      <div class="kpi-value" id="verified">--</div>
+      <div class="segments" id="verified-segments"></div>
+      <div class="kpi-foot">Confirmed by a separate read of each system</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Route</div>
+      <div class="kpi-value small" id="route">--</div>
+      <div class="kpi-foot" id="route-foot">&nbsp;</div>
     </div>
   </section>
 
-  <section class="chaos" aria-label="Chaos controls">
-    <div class="chaos-head">
-      <h2>Break something</h2>
-      <span class="toast" id="toast" role="status" aria-live="polite"></span>
+  <section class="card map-card" aria-label="Route map">
+    <div class="card-head">
+      <h2>Network</h2>
+      <div class="legend">
+        <span><i class="ln booked"></i>Booked</span>
+        <span><i class="ln avail"></i>Available</span>
+        <span><i class="ln cancelled"></i>Cancelled</span>
+        <span><i class="sq"></i>Cold storage</span>
+      </div>
     </div>
-    <div class="buttons">
-      <button data-event="cancel_flight"><span class="ico">✈</span><b>Cancel flight</b><small>The original flight is gone</small></button>
-      <button data-event="kill_agent"><span class="ico">⏻</span><b>Kill agent</b><small>Stop it mid run, then restart</small></button>
-      <button data-event="change_carrier"><span class="ico">⇄</span><b>Change carrier API</b><small>The carrier switches format</small></button>
-      <button data-event="random"><span class="ico">⚄</span><b>Random chaos</b><small>A failure we did not pick</small></button>
-    </div>
+    <div id="map" class="map"></div>
   </section>
 
-  <div class="grid">
-    <section class="panel plan" aria-label="Recovery plan">
-      <h2>Recovery plan</h2>
-      <ol id="steps"><li class="empty">Loading the plan</li></ol>
+  <section class="card routes-card" aria-label="Route options">
+    <div class="card-head">
+      <h2>Route options</h2>
+      <div class="legend">
+        <span><i class="sw s1"></i>Cooled</span>
+        <span><i class="sw s2"></i>Exposed</span>
+      </div>
+    </div>
+    <p class="card-sub">Transit time by route. Exposed minutes use the excursion budget.</p>
+    <div id="routes-chart" class="routes-chart"></div>
+    <details class="table-view"><summary>Show as table</summary><div id="routes-table"></div></details>
+  </section>
+
+  <section class="card plan-card" aria-label="Recovery plan">
+    <div class="proposal" id="proposal" hidden>
+      <div class="proposal-head"><svg><use href="#i-alert"/></svg><span>Approval required</span></div>
+      <p class="proposal-summary" id="proposal-summary"></p>
+      <div class="proposal-match" id="proposal-match" hidden>
+        <span class="match-label">Similar past incident</span>
+        <span class="match-text" id="proposal-memory"></span>
+        <span class="match-score"><span class="meter thin"><span id="proposal-score-bar"></span></span><span id="proposal-score"></span></span>
+      </div>
+      <table class="mapping"><thead><tr><th>Field the agent expects</th><th>Where it is now</th></tr></thead><tbody id="proposal-map"></tbody></table>
+      <textarea id="proposal-edit" rows="5" hidden spellcheck="false" aria-label="Corrected mapping as JSON"></textarea>
+      <div class="proposal-actions">
+        <button class="btn primary" id="approve">Approve and store rule</button>
+        <button class="btn" id="correct">Edit mapping</button>
+        <span class="error-text" id="proposal-error"></span>
+      </div>
+    </div>
+    <div class="card-head"><h2>Recovery plan</h2><span class="card-meta" id="plan-meta"></span></div>
+    <ol class="steps" id="steps"><li class="empty">Loading</li></ol>
+  </section>
+
+  <div class="stack">
+    <section class="card burn-card" aria-label="Budget over time">
+      <div class="card-head"><h2>Budget over time</h2><span class="card-meta">Minutes remaining, this session</span></div>
+      <div id="burn-chart" class="burn-chart"></div>
     </section>
-
-    <aside class="side">
-      <section class="panel proposal" id="proposal" hidden aria-label="Proposed fix">
-        <h2>A fix needs your approval</h2>
-        <p id="proposal-summary"></p>
-        <p class="memory" id="proposal-memory"></p>
-        <table class="mapping"><thead><tr><th>Old field</th><th>New field</th></tr></thead><tbody id="proposal-map"></tbody></table>
-        <textarea id="proposal-edit" rows="5" hidden spellcheck="false"></textarea>
-        <div class="actions">
-          <button class="primary" id="approve">Approve</button>
-          <button id="correct">Correct it</button>
-        </div>
-        <p class="error-text" id="proposal-error"></p>
-      </section>
-
-      <section class="panel" aria-label="Systems">
-        <h2>Systems</h2>
-        <div class="systems" id="systems"></div>
-      </section>
-    </aside>
+    <section class="card systems-card" aria-label="Connected systems">
+      <div class="card-head"><h2>Connected systems</h2></div>
+      <ul class="systems" id="systems"></ul>
+    </section>
   </div>
 
-  <section class="panel log" aria-label="Event log">
-    <h2>What happened</h2>
-    <ol id="log"></ol>
+  <section class="card log-card" aria-label="Event log">
+    <div class="card-head"><h2>Event log</h2><span class="card-meta" id="log-meta"></span></div>
+    <div class="log-scroll" id="log-scroll"><table class="log"><tbody id="log"></tbody></table></div>
   </section>
 </main>
 
-<footer>
-  The shipment, product and systems are simulated. ColdTrace quarantines and reroutes. It never decides whether a product is safe to use. A qualified person makes that call.
+<footer class="foot">
+  Shipment, product and systems are simulated. ColdTrace quarantines and reroutes. It never decides whether a product is safe to use. A qualified person makes that decision.
 </footer>
 
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+<script src="/ui/vendor/leaflet/leaflet.js"></script>
+<script src="/ui/charts.js"></script>
+<script src="/ui/map.js"></script>
 <script src="/ui/app.js"></script>
 <script>
   if (new URLSearchParams(location.search).has('preview')) {

@@ -1,26 +1,29 @@
-// ColdTrace demo screen. Polls GET /state once a second and renders it. Shape: docs/CONTRACTS.md, "UI state".
-// Everything is written with textContent, never innerHTML, because log lines come from other systems.
+// ColdTrace console. Polls GET /state every second (shape: docs/CONTRACTS.md, "UI state") and
+// GET /network every 3 seconds for the map and route chart.
+// Text from other systems is always set with textContent, never innerHTML.
 window.ColdTrace = (() => {
   const $ = id => document.getElementById(id)
   const STALE_AFTER_MS = 3000
+  const MAX_SAMPLES = 900
 
-  // Plain language for each ledger action. Unknown actions fall back to their name.
   const ACTIONS = {
-    set_quarantine: 'Ask the hospital to hold the shipment in quarantine on arrival',
-    reserve_storage: 'Reserve a qualified cold storage bay for the layover',
+    set_quarantine: 'Hold the shipment in quarantine on arrival',
+    reserve_storage: 'Reserve qualified cold storage for the layover',
     rebook_carrier: 'Book the shipment onto the new route',
-    notify_hospital: 'Tell the hospital the new arrival time',
+    notify_hospital: 'Send the hospital the new arrival time',
   }
-  const STATUS = {
-    planned: () => 'Waiting',
-    sent: () => 'Sent, checking',
-    verified: s => 'Confirmed by ' + s.system,
-    failed: () => 'Did not take effect',
-    skipped: () => 'No longer needed',
+  const STEP = {
+    planned: { badge: '', text: () => 'Waiting' },
+    sent: { badge: 'warn', text: () => 'Awaiting confirmation' },
+    verified: { badge: 'good', text: s => `Confirmed by ${s.system}` },
+    failed: { badge: 'crit', text: () => 'Did not take effect' },
+    skipped: { badge: '', text: () => 'No longer needed' },
   }
-  const SYSTEM_ORDER = ['carrier', 'warehouse', 'hospital', 'agent']
+  const SHIP = { in_transit: ['info', 'In transit'], recovering: ['warn', 'Recovery in progress'], recovered: ['good', 'Rerouted'],
+    delivered: ['good', 'Delivered'], quarantined: ['crit', 'Quarantined'] }
 
   let lastOk = 0, everOk = false, seenLog = 0, editing = false, currentProposal = null
+  let net = null, lastState = null, samples = window.__previewHistory || []
 
   function el(tag, cls, text) {
     const n = document.createElement(tag)
@@ -28,149 +31,206 @@ window.ColdTrace = (() => {
     if (text !== undefined && text !== null) n.textContent = text
     return n
   }
+  function icon(id) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), use = document.createElementNS('http://www.w3.org/2000/svg', 'use')
+    use.setAttribute('href', '#' + id); svg.append(use); return svg
+  }
+  function badge(cls, text) { return el('span', 'badge ' + (cls || ''), text) }
+  const dur = m => Charts.dur(m)
 
-  function fmtBudget(min) {
-    if (min === null || min === undefined) return '--'
-    const m = Math.max(0, Math.round(min)), h = Math.floor(m / 60)
-    return h ? `${h} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`
+  function routeLabel(r) {
+    if (!r || !net) return null
+    const via = r.legs.filter(l => l.kind === 'layover').map(l => (net.airports[l.from] || {}).name || l.from)
+    const truck = r.legs.find(l => l.kind === 'truck')
+    return `${r.route_id}` + (via.length ? ` via ${via.join(', ')}` : truck ? `, truck from ${(net.airports[truck.from] || {}).name || truck.from}` : ', nonstop')
   }
 
-  function renderTiles(st) {
-    const ship = st.shipment || {}, c = st.counters || {}
-    $('shipment-id').textContent = ship.shipment_id || '--'
-    const pill = $('shipment-status')
-    pill.textContent = (ship.status || 'unknown').replace(/_/g, ' ')
-    pill.className = 'pill ' + (ship.status || '')
+  function renderHeader(st) {
+    const ship = st.shipment || {}
+    $('shipment-id').textContent = 'Shipment ' + (ship.shipment_id || '')
+    const [cls, text] = SHIP[ship.status] || ['', (ship.status || 'unknown').replace(/_/g, ' ')]
+    const b = $('shipment-status'); b.className = 'badge ' + cls; b.textContent = text
+    if (net) {
+      const range = net.temp_range_c ? `${net.temp_range_c[0]} to ${net.temp_range_c[1]} °C` : ''
+      $('shipment-meta').textContent = [net.product, `${net.origin} to ${net.destination}`, range, net.consignee].filter(Boolean).join('  ·  ')
+    }
+  }
 
+  function renderKpis(st) {
+    const ship = st.shipment || {}, c = st.counters || {}
+    const total = (net && net.budget_total_min) || ship.budget_remaining_min
     const min = ship.budget_remaining_min
-    $('budget').textContent = fmtBudget(min)
-    $('budget-tile').className = 'tile ' + (min == null ? '' : min >= 120 ? 'ok' : min >= 60 ? 'warn' : 'bad')
+    $('budget').textContent = min == null ? '--' : dur(min)
+    $('kpi-budget').className = 'kpi ' + (min == null ? '' : min < 60 ? 'crit' : min < 120 ? 'warn' : '')
+    $('budget-meter').style.width = total ? Math.max(0, Math.min(100, 100 * min / total)) + '%' : '0'
+    $('budget-foot').textContent = total ? `of ${dur(total)} allowed out of range` : ''
 
     const d = c.duplicate_actions
     $('dupes').textContent = d == null ? '--' : String(d)
-    $('dupes-tile').className = 'tile ' + (d === 0 ? 'zero' : d > 0 ? 'some' : '')
-    $('dupes-hint').textContent = d > 0
-      ? 'Something was done more than once. Check the log.'
-      : 'Counted from the warehouse and carrier, not from the agent'
+    $('kpi-dupes').className = 'kpi ' + (d === 0 ? 'good' : d > 0 ? 'crit' : '')
+    $('dupes-foot').textContent = d > 0 ? 'An action happened more than once. See the event log.' : 'Counted from the warehouse and carrier'
 
-    const done = c.steps_verified || 0, total = c.steps_total || 0
-    $('verified').textContent = total ? `${done} of ${total}` : 'No plan'
-    $('verified-bar').style.width = total ? (100 * done / total) + '%' : '0'
+    const done = c.steps_verified || 0, n = c.steps_total || 0
+    $('verified').textContent = n ? `${done} of ${n}` : 'No plan yet'
+    const seg = $('verified-segments'); seg.replaceChildren()
+    for (const s of st.steps || []) seg.append(el('i', s.status))
+
+    const routes = (net && net.routes) || []
+    const booked = routes.find(r => r.status === 'booked'), original = routes.find(r => r.original)
+    if (booked) {
+      $('route').textContent = routeLabel(booked)
+      $('route-foot').textContent = `Transit ${dur(booked.total_min)}, exposed ${dur(booked.exposed_min)}`
+    } else if (original) {
+      const flight = (original.legs.find(l => l.flight) || {}).flight
+      const cancelled = original.status === 'cancelled'
+      $('route').textContent = cancelled ? 'Awaiting rebooking' : routeLabel(original)
+      $('route-foot').textContent = cancelled ? `${original.route_id} lost when flight ${flight} was cancelled` : `Original booking on flight ${flight}`
+    } else {
+      $('route').textContent = '--'; $('route-foot').textContent = 'Carrier not reachable'
+    }
   }
 
-  function renderSteps(steps) {
+  function renderSteps(steps, counters) {
     const list = $('steps')
     list.replaceChildren()
+    $('plan-meta').textContent = steps && steps.length ? `${counters.steps_verified || 0} of ${steps.length} confirmed` : ''
     if (!steps || !steps.length) {
-      list.append(el('li', 'empty', 'No recovery plan yet. The agent writes its plan here as soon as a disruption starts.'))
+      list.append(el('li', 'empty', 'No recovery plan yet. The agent writes its plan here when a disruption starts.'))
       return
     }
     for (const s of steps) {
+      const def = STEP[s.status] || { badge: '', text: () => s.status }
       const li = el('li', 'step ' + (s.status || 'planned'))
-      li.append(el('div', 'num', s.seq))
+      const ico = el('div', 'ico')
+      if (s.status === 'verified') ico.append(icon('i-check'))
+      else if (s.status === 'failed') ico.append(icon('i-x'))
+      else if (s.status === 'sent') ico.append(icon('i-send'))
+      else if (s.status === 'skipped') ico.append(icon('i-dash'))
+      else ico.textContent = s.seq
       const body = el('div')
-      body.append(el('div', 'what', ACTIONS[s.action] || (s.action || '').replace(/_/g, ' ')))
-      const why = el('div', 'why')
-      why.append(el('span', 'chip', s.system || ''))
-      if (s.reason) why.append(document.createTextNode(s.reason))
-      body.append(why)
-      li.append(body)
-      li.append(el('div', 'status', (STATUS[s.status] || (() => s.status))(s)))
+      body.append(el('div', 'title', ACTIONS[s.action] || (s.action || '').replace(/_/g, ' ')))
+      const meta = el('div', 'meta')
+      meta.append(el('span', 'sys', s.system || ''))
+      if (s.reason) meta.append(document.createTextNode('  ·  ' + s.reason))
+      body.append(meta)
+      li.append(ico, body, badge(def.badge, def.text(s)))
       list.append(li)
     }
   }
 
-  function systemDetail(name, s) {
-    if (name === 'carrier') return [s.schema_version === 2 ? 'New API format (v2)' : 'API format v1', s.schema_version === 2]
-    if (name === 'warehouse') return [`${s.reservations ?? 0} reservation${s.reservations === 1 ? '' : 's'} held`, false]
-    if (name === 'agent') return [s.alive ? `${s.worker || 'worker'} running` : (s.worker ? `${s.worker} not responding` : 'Not running'), !s.alive]
-    return [s.ok ? 'Receiving updates' : 'Not reachable', false]
-  }
-
   function renderSystems(systems) {
-    const box = $('systems')
-    box.replaceChildren()
-    for (const name of SYSTEM_ORDER) {
+    const list = $('systems')
+    list.replaceChildren()
+    const rows = [
+      ['carrier', s => s.ok ? (s.schema_version === 2 ? ['warn', 'Format changed', 'Answering in API v2'] : ['good', 'Operational', 'API v1']) : null],
+      ['warehouse', s => s.ok ? ['good', 'Operational', `${s.reservations ?? 0} reservation${s.reservations === 1 ? '' : 's'} held for this shipment`] : null],
+      ['hospital', s => s.ok ? ['good', 'Operational', 'Receiving delivery updates'] : null],
+      ['agent', s => s.alive ? ['good', 'Running', s.worker || 'worker'] : s.worker ? ['crit', 'Not responding', `${s.worker} missed its heartbeat`] : ['', 'Offline', 'No worker registered']],
+    ]
+    for (const [name, fn] of rows) {
       const s = (systems || {})[name] || {}
-      const ok = name === 'agent' ? s.alive : s.ok
-      const card = el('div', 'sys ' + (ok ? 'ok' : 'down'))
-      card.append(el('div', 'name', name))
-      const [text, flag] = ok || name === 'agent' ? systemDetail(name, s) : ['Not reachable', false]
-      card.append(el('div', 'detail' + (flag ? ' flag' : ''), text))
-      box.append(card)
+      const [cls, label, detail] = fn(s) || ['crit', 'Unreachable', 'No answer on its health check']
+      const li = el('li')
+      li.append(el('span', 'name', name), badge(cls, label), el('span', 'detail', detail))
+      list.append(li)
     }
   }
 
   function renderProposal(p) {
     const box = $('proposal')
     if (!p) { box.hidden = true; currentProposal = null; editing = false; return }
-    if (currentProposal && currentProposal.proposal_id === p.proposal_id) return  // keep any edit in progress
+    if (currentProposal && currentProposal.proposal_id === p.proposal_id) return  // keep an edit in progress
     currentProposal = p
     box.hidden = false
-    $('proposal-summary').textContent = p.summary || `The ${p.system || 'system'} answered in a shape the agent does not know.`
-    $('proposal-memory').textContent = p.memory_hit
-      ? `Based on a similar past incident: "${p.memory_hit}"` + (p.score != null ? ` (match ${Number(p.score).toFixed(2)})` : '')
-      : ''
-    const tbody = $('proposal-map')
-    tbody.replaceChildren()
+    $('proposal-summary').textContent = p.summary || `The ${p.system || 'system'} answered in a format the agent does not recognise. It proposes this mapping.`
+    $('proposal-match').hidden = !p.memory_hit
+    $('proposal-memory').textContent = p.memory_hit || ''
+    const score = p.score != null ? Number(p.score) : null
+    $('proposal-score').textContent = score != null ? score.toFixed(2) : ''
+    $('proposal-score-bar').style.width = score != null ? (score * 100) + '%' : '0'
+    const tbody = $('proposal-map'); tbody.replaceChildren()
     const map = (p.fix && p.fix.map) || {}
-    for (const [from, to] of Object.entries(map)) {
-      const tr = el('tr')
-      tr.append(el('td', null, from), el('td', null, to))
-      tbody.append(tr)
-    }
-    if (!Object.keys(map).length) {
-      const tr = el('tr'), td = el('td', null, JSON.stringify(p.fix || {}))
-      td.colSpan = 2; tr.append(td); tbody.append(tr)
-    }
+    for (const [from, to] of Object.entries(map)) { const tr = el('tr'); tr.append(el('td', null, from), el('td', null, to)); tbody.append(tr) }
+    if (!Object.keys(map).length) { const tr = el('tr'), td = el('td', null, JSON.stringify(p.fix || {})); td.colSpan = 2; tr.append(td); tbody.append(tr) }
     $('proposal-edit').hidden = true
     $('proposal-edit').value = JSON.stringify(p.fix || {}, null, 2)
-    $('correct').textContent = 'Correct it'
-    $('approve').textContent = 'Approve'
+    $('correct').textContent = 'Edit mapping'
+    $('approve').textContent = 'Approve and store rule'
     $('proposal-error').textContent = ''
   }
 
+  function kindOf(msg) {
+    const m = msg.toLowerCase()
+    if (m.startsWith('chaos')) return ['chaos', 'Chaos']
+    if (m.includes('resume') || m.includes('restart')) return ['resume', 'Resume']
+    if (m.includes('memory') || m.includes('propos') || m.includes('rule')) return ['memory', 'Memory']
+    if (m.startsWith('verified') || m.includes('confirmed')) return ['verify', 'Verified']
+    if (m.includes('atlas')) return ['', 'System']
+    return ['', 'Agent']
+  }
+
   function renderLog(log) {
-    const list = $('log')
-    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40
-    list.replaceChildren()
-    if (!log || !log.length) { list.append(el('li', 'empty', 'Nothing has happened yet.')); return }
+    const body = $('log'), box = $('log-scroll')
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40
+    body.replaceChildren()
+    $('log-meta').textContent = log && log.length ? `${log.length} event${log.length === 1 ? '' : 's'}` : ''
+    if (!log || !log.length) { const tr = el('tr', 'empty'), td = el('td', null, 'Nothing has happened yet.'); td.colSpan = 3; tr.append(td); body.append(tr); return }
     log.forEach((line, i) => {
-      const li = el('li', i >= seenLog && seenLog ? 'new' : '')
-      li.append(el('span', 'ts', line.ts), el('span', 'msg', line.message))
-      list.append(li)
+      const tr = el('tr', seenLog && i >= seenLog ? 'new' : '')
+      const [cls, label] = kindOf(line.message || '')
+      const kind = el('td', 'kind'); kind.append(el('span', 'tag ' + cls, label))
+      tr.append(el('td', 'ts', line.ts), kind, el('td', 'msg', line.message))
+      body.append(tr)
     })
     seenLog = log.length
-    if (atBottom) list.scrollTop = list.scrollHeight
+    if (atBottom) box.scrollTop = box.scrollHeight
   }
 
-  function setConnection(state, text) {
-    $('live').className = 'live ' + state
-    $('live-text').textContent = text
+  function renderCharts() {
+    const left = lastState && lastState.shipment ? lastState.shipment.budget_remaining_min : null
+    Charts.routes($('routes-chart'), net, left, id => MapView.highlight(id))
+    Charts.routesTable($('routes-table'), net)
+    Charts.burn($('burn-chart'), samples, net && net.budget_total_min)
   }
+
+  function setConnection(state, text) { $('live').className = 'live ' + state; $('live-text').textContent = text }
 
   function checkStale() {
-    if (!everOk) return  // the first failure is handled in poll()
+    if (!everOk) return
     const age = Date.now() - lastOk
     $('error-banner').hidden = age <= STALE_AFTER_MS * 3
     const stale = age > STALE_AFTER_MS
     $('stale-banner').hidden = !stale
     if (stale) {
-      $('stale-banner').textContent = `Data is ${Math.round(age / 1000)} seconds old. The numbers may have changed.`
+      $('stale-banner').textContent = `Data is ${Math.round(age / 1000)} seconds old. Figures may have changed.`
       setConnection(age > STALE_AFTER_MS * 3 ? 'off' : 'stale', 'Out of date')
     }
+  }
+
+  async function pollNetwork() {
+    try {
+      const res = await fetch('/network', { cache: 'no-store' })
+      if (!res.ok) return
+      net = await res.json()
+      MapView.update(net, net.shipment_position)
+      if (lastState) { renderHeader(lastState); renderKpis(lastState) }
+      renderCharts()
+    } catch { /* the state poll reports connection problems */ }
   }
 
   async function poll() {
     try {
       const res = await fetch('/state', { cache: 'no-store' })
       if (!res.ok) throw new Error('state ' + res.status)
-      const st = await res.json()
+      const st = lastState = await res.json()
       lastOk = Date.now(); everOk = true
       $('error-banner').hidden = true
-      renderTiles(st); renderSteps(st.steps); renderSystems(st.systems); renderProposal(st.proposal); renderLog(st.log)
-      setConnection('on', 'Live, updated just now')
-    } catch (e) {
+      const v = st.shipment && st.shipment.budget_remaining_min
+      if (v != null) { samples.push({ t: Date.now(), v }); if (samples.length > MAX_SAMPLES) samples.shift() }
+      renderHeader(st); renderKpis(st); renderSteps(st.steps, st.counters || {}); renderSystems(st.systems)
+      renderProposal(st.proposal); renderLog(st.log); renderCharts()
+      setConnection('on', 'Live')
+    } catch {
       if (!everOk) { $('error-banner').hidden = false; setConnection('off', 'Not connected') }
     }
     checkStale()
@@ -178,17 +238,14 @@ window.ColdTrace = (() => {
 
   function toast(text, isError) {
     const t = $('toast')
-    t.textContent = text
-    t.className = 'toast' + (isError ? ' err' : '')
-    clearTimeout(t._timer)
-    t._timer = setTimeout(() => { t.textContent = '' }, 6000)
+    t.textContent = text; t.className = 'toast' + (isError ? ' err' : ''); t.hidden = false
+    clearTimeout(t._timer); t._timer = setTimeout(() => { t.hidden = true }, 4000)
   }
-
   async function errorText(res) {
     try { const b = await res.json(); return b.detail || b.message || res.statusText } catch { return res.statusText || 'Request failed' }
   }
 
-  function wireChaos() {
+  function wire() {
     document.querySelectorAll('button[data-event]').forEach(b => {
       b.onclick = async () => {
         b.disabled = true
@@ -196,41 +253,40 @@ window.ColdTrace = (() => {
           const res = await fetch('/chaos/' + b.dataset.event, { method: 'POST' })
           if (!res.ok) return toast(await errorText(res), true)
           const body = await res.json()
-          toast(body.message || (b.querySelector('b').textContent + ' sent'))
-          poll()
+          toast(body.message || b.textContent.trim() + ' sent')
+          poll(); pollNetwork()
         } catch { toast('Could not reach the server', true) } finally { b.disabled = false }
       }
     })
-  }
-
-  function wireProposal() {
     $('correct').onclick = () => {
       editing = !editing
       $('proposal-edit').hidden = !editing
-      $('correct').textContent = editing ? 'Cancel edit' : 'Correct it'
-      $('approve').textContent = editing ? 'Save correction' : 'Approve'
+      $('correct').textContent = editing ? 'Cancel edit' : 'Edit mapping'
+      $('approve').textContent = editing ? 'Save correction as rule' : 'Approve and store rule'
     }
     $('approve').onclick = async () => {
       if (!currentProposal) return
       const body = { proposal_id: currentProposal.proposal_id, decision: editing ? 'corrected' : 'approved', by: 'operator' }
-      if (editing) {
-        try { body.fix = JSON.parse($('proposal-edit').value) } catch { $('proposal-error').textContent = 'The correction is not valid JSON.'; return }
-      }
+      if (editing) { try { body.fix = JSON.parse($('proposal-edit').value) } catch { $('proposal-error').textContent = 'The mapping is not valid JSON.'; return } }
       $('approve').disabled = true
       try {
         const res = await fetch('/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         if (!res.ok) { $('proposal-error').textContent = await errorText(res); return }
-        toast(editing ? 'Correction saved as a rule' : 'Fix approved')
+        toast(editing ? 'Correction stored as a rule' : 'Fix approved and stored as a rule')
         currentProposal = null; editing = false
         poll()
       } catch { $('proposal-error').textContent = 'Could not reach the server.' } finally { $('approve').disabled = false }
     }
+    let t; window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(renderCharts, 150) })
   }
 
   function start() {
-    wireChaos(); wireProposal()
-    poll()
+    if (window.__previewHistory) samples = window.__previewHistory
+    MapView.init($('map'))
+    wire()
+    pollNetwork(); poll()
     setInterval(poll, 1000)
+    setInterval(pollNetwork, 3000)
   }
 
   return { start }
