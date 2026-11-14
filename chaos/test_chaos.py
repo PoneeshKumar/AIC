@@ -100,3 +100,36 @@ def test_drop_targets_a_system_the_agent_will_write_to(monkeypatch):
     assert injector._drop_target() == "warehouse"
     held.append({"reservation_id": "RES-1"})
     assert injector._drop_target() == "hospital"
+
+
+def test_wake_waits_for_a_live_agent_then_starts_a_fresh_one(monkeypatch):
+    import subprocess
+    from datetime import datetime, timezone
+    from chaos import injector
+    live = subprocess.Popen(["sleep", "0.3"])
+    worker = {"pid": live.pid, "worker_id": "w7", "heartbeat": datetime.now(timezone.utc), "alive": True}
+    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(
+        workers=FakeColl([worker]), shipments=FakeColl([{"shipment_id": "S"}])))
+    started = []
+    monkeypatch.setattr(injector, "_start_agent", lambda shipment_id, worker_id="worker-1": started.append((shipment_id, worker_id)) or 99)
+    assert injector.wake_agent() is None and started == []  # it is still working, so nothing starts yet
+    assert injector.wake_agent() is None                     # a second press queues nothing more
+    time.sleep(1.5)
+    assert started == [("S", "w7")]
+
+    # The agent died without signing off: Atlas still says alive and fresh, the process is gone. Start at once.
+    assert injector.wake_agent() == 99 and len(started) == 2
+
+
+def test_second_press_before_the_agent_registers_starts_no_second_agent(monkeypatch):
+    import subprocess
+    from chaos import injector
+    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(shipments=FakeColl([{"shipment_id": "S"}])))  # no worker yet
+    real, spawned = subprocess.Popen, []
+    def popen(argv, **k):
+        spawned.append(argv)
+        return real(["sleep", "0.4"])
+    monkeypatch.setattr(injector.subprocess, "Popen", popen)
+    assert injector.wake_agent() and injector.wake_agent() is None  # the first one is still starting up
+    time.sleep(1.2)
+    assert len(spawned) == 2, "the queued start runs once the first agent has exited"

@@ -19,6 +19,7 @@ import random
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -47,6 +48,7 @@ def _log(run_id: str, message: str, data: dict):
     get_db()[config.EVENTS].insert_one(Event(run_id=run_id, worker="chaos", kind="chaos", message=message, data=data).model_dump())
 
 
+WAIT_FOR_EXIT_S = 60  # a run takes about 8 s against Atlas
 HEARTBEAT_FRESH_S = 15  # a worker can sit in a 10 s request timeout between heartbeats
 
 
@@ -58,9 +60,51 @@ def _is_fresh(beat) -> bool:
     return datetime.now(timezone.utc) - beat < timedelta(seconds=HEARTBEAT_FRESH_S)
 
 
+def _running(pid) -> bool:
+    """True while the process exists. This is what the operating system says, so it holds when Atlas is wrong."""
+    if not pid:
+        return False
+    try:
+        if os.waitpid(int(pid), os.WNOHANG)[0]:  # our own child that has exited keeps its pid until collected
+            return False
+    except ChildProcessError:
+        pass  # not our child, for example an agent started from a terminal
+    try:
+        os.kill(int(pid), 0)  # signal 0 sends nothing, it only checks
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass  # it exists and belongs to another user
+    return True
+
+
 def _is_live(worker: dict) -> bool:
-    """The agent clears `alive` when it exits, and a killed one stops sending heartbeats."""
-    return bool(worker.get("alive")) and _is_fresh(worker.get("heartbeat"))
+    """Live means the agent says so, said so recently, and its process still exists.
+
+    The agent clears `alive` when it exits. The process check covers an agent that was killed or
+    could not reach Atlas to sign off.
+    """
+    return bool(worker.get("alive")) and _is_fresh(worker.get("heartbeat")) and _running(worker.get("pid"))
+
+
+_last_started: int | None = None  # the agent this process started last. It takes about 2 s to register in Atlas.
+_queued = threading.Lock()         # held while one agent start waits for the working agent to exit
+
+
+def _live_pid(worker: dict) -> int | None:
+    """Pid of the agent that is working now, or None.
+
+    Also true for an agent this process has just started and that has not registered yet. Without
+    that, a second button press in those 2 s would start a second agent beside the first.
+    """
+    if _is_live(worker):
+        return int(worker["pid"])
+    try:
+        if _last_started and os.waitpid(_last_started, os.WNOHANG)[0] == 0:  # our own child, still running
+            return _last_started
+    except ChildProcessError:
+        pass  # already collected, so that pid is no longer ours
+    return None
 
 
 def _kill_agent() -> dict:
@@ -71,10 +115,11 @@ def _kill_agent() -> dict:
     w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)]) or {}
     killed = None
     # Only a recent heartbeat proves the pid is still our agent. A stale pid may belong to another program.
-    if _is_live(w):
+    pid = _live_pid(w)
+    if pid:
         try:
-            os.kill(int(w["pid"]), signal.SIGKILL)
-            killed = w["pid"]
+            os.kill(pid, signal.SIGKILL)
+            killed = pid
         except ProcessLookupError:
             pass  # it finished on its own just now
         time.sleep(2)
@@ -87,6 +132,8 @@ def _start_agent(shipment_id: str, worker_id: str = "worker-1") -> int:
         [sys.executable, "-m", "agent.run", "--shipment", shipment_id, "--worker-id", worker_id],
         start_new_session=True,
     )
+    global _last_started
+    _last_started = p.pid
     return p.pid
 
 
@@ -94,10 +141,30 @@ def wake_agent() -> int | None:
     """Start the agent unless one is already working. Called when something changed that it must react to."""
     db = get_db()
     w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)]) or {}
-    if _is_live(w):
-        return None  # the live worker re-reads routes on its next plan
     ship = db[config.SHIPMENTS].find_one() or {}
-    return _start_agent(ship["shipment_id"], w.get("worker_id", "worker-1")) if ship.get("shipment_id") else None
+    if not ship.get("shipment_id"):
+        return None
+    worker_id = w.get("worker_id", "worker-1")
+    pid = _live_pid(w)
+    if pid:
+        # The working agent plans once, before its steps, so it will not see this change. Start a fresh
+        # one the moment it exits. The fresh one reads the world first, so nothing is done twice.
+        # One queued start is enough however many buttons are pressed.
+        if _queued.acquire(blocking=False):
+            threading.Thread(target=_start_after, args=(pid, ship["shipment_id"], worker_id)).start()
+        return None
+    return _start_agent(ship["shipment_id"], worker_id)
+
+
+def _start_after(pid, shipment_id: str, worker_id: str) -> None:
+    try:
+        deadline = time.monotonic() + WAIT_FOR_EXIT_S
+        while _running(pid) and time.monotonic() < deadline:
+            time.sleep(0.5)
+        if not _running(pid):  # still alive after the wait: leave it, two agents on one run would fight
+            _start_agent(shipment_id, worker_id)
+    finally:
+        _queued.release()
 
 
 def _drop_target() -> str:
