@@ -1,0 +1,17 @@
+{
+  "_note": "Synthetic incident history for the failure memory. Write 15 to 20 of these during the event. Vary the wording so retrieval is a real test.",
+  "incidents": [
+    {"system": "carrier", "kind": "incident_fix",
+     "summary": "Carrier tracking endpoint stopped returning shipment_status and eta at the top level. Fields moved under a tracking object and the time became epoch seconds.",
+     "fix": {"map": {"shipment_status": "tracking.state", "eta": "tracking.estimated_arrival_epoch"}, "transform": {"eta": "epoch_seconds_to_iso"}}},
+    {"system": "warehouse", "kind": "incident_fix",
+     "summary": "Warehouse reservation call timed out but the bay was actually held. Retrying created a second hold.",
+     "fix": {"rule": "after a timeout, read reservations by shipment before any retry"}},
+    {"system": "carrier", "kind": "incident_fix",
+     "summary": "Carrier renamed booking status values from lowercase words to uppercase codes.",
+     "fix": {"map_values": {"confirmed": "CONFIRMED", "pending": "PENDING"}}},
+    {"system": "hospital", "kind": "incident_fix",
+     "summary": "Hospital receiving rejected delivery updates without a timezone on the arrival time.",
+     "fix": {"rule": "always send arrival times in UTC with an explicit offset"}}
+  ]
+}

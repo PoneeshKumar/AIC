@@ -1,0 +1,17 @@
+{
+  "_note": "Illustrative routes between real Canadian airports. Times are invented for the demo.",
+  "routes": [
+    {"route_id": "R-DIRECT", "legs": [{"flight": "CT118", "from": "YYZ", "to": "YVR", "duration_min": 300, "cooled": true}]},
+    {"route_id": "R-YYC", "legs": [
+      {"flight": "CT204", "from": "YYZ", "to": "YYC", "duration_min": 255, "cooled": true},
+      {"layover_city": "YYC", "duration_min": 95, "cooled": false},
+      {"flight": "CT310", "from": "YYC", "to": "YVR", "duration_min": 90, "cooled": true}]},
+    {"route_id": "R-YWG", "legs": [
+      {"flight": "CT152", "from": "YYZ", "to": "YWG", "duration_min": 160, "cooled": true},
+      {"layover_city": "YWG", "duration_min": 210, "cooled": false},
+      {"flight": "CT377", "from": "YWG", "to": "YVR", "duration_min": 185, "cooled": true}]},
+    {"route_id": "R-YEG-TRUCK", "legs": [
+      {"flight": "CT166", "from": "YYZ", "to": "YEG", "duration_min": 250, "cooled": true},
+      {"truck": "reefer", "from": "YEG", "to": "YVR", "duration_min": 720, "cooled": true}]}
+  ]
+}

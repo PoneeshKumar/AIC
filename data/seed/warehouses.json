@@ -1,0 +1,8 @@
+{
+  "_note": "Synthetic cold storage sites. A layover with a qualified bay available does not eat the budget.",
+  "warehouses": [
+    {"warehouse_id": "WH-YYC-1", "city": "YYC", "qualified_2_8c": true, "bays_free": 2},
+    {"warehouse_id": "WH-YWG-1", "city": "YWG", "qualified_2_8c": true, "bays_free": 0},
+    {"warehouse_id": "WH-YVR-1", "city": "YVR", "qualified_2_8c": true, "bays_free": 4}
+  ]
+}

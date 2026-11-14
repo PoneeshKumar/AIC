@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ColdTrace</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 1100px }
+  .row { display: flex; gap: 12px; margin-bottom: 12px }
+  .card { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 12px }
+  .big { font-size: 28px }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 8px; min-height: 120px }
+</style>
+</head>
+<body>
+<!-- Owner: UI. Layout target is the mockup in HANDOFF.md, "Demo screen". Plain HTML, no build step. -->
+<h2 id="shipment">Shipment</h2>
+<div class="row">
+  <div class="card">Budget remaining<div class="big" id="budget">--</div></div>
+  <div class="card">Duplicate actions<div class="big" id="dupes">--</div></div>
+  <div class="card">Steps verified<div class="big" id="verified">--</div></div>
+</div>
+<div class="row">
+  <div class="card" id="plan">Recovery plan (planned, sent, verified)</div>
+  <div class="card" id="systems">Systems (carrier, warehouse, hospital, agent)</div>
+</div>
+<div class="row">
+  <button data-event="cancel_flight">Cancel flight</button>
+  <button data-event="kill_agent">Kill agent</button>
+  <button data-event="change_carrier">Change carrier API</button>
+  <button data-event="random">Random chaos</button>
+</div>
+<pre id="log">event log</pre>
+<script>
+// TODO(UI): render /state into the elements above. Poll once a second.
+async function poll() {
+  try {
+    const res = await fetch('/state')
+    if (res.ok) { document.getElementById('log').textContent = JSON.stringify(await res.json(), null, 2) }
+  } catch (e) {}
+}
+document.querySelectorAll('button[data-event]').forEach(b => {
+  b.onclick = () => fetch('/chaos/' + b.dataset.event, { method: 'POST' })
+})
+setInterval(poll, 1000)
+</script>
+</body>
+</html>

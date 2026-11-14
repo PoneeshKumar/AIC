@@ -1,0 +1,13 @@
+{
+  "_note": "Synthetic demo data. Not a real product or shipment. The budget is an invented number.",
+  "shipment_id": "BIO-2048",
+  "product": "Simulated biologic (fictional)",
+  "units": 1200,
+  "origin": "YYZ",
+  "destination": "YVR",
+  "consignee": "Simulated hospital pharmacy, Vancouver",
+  "temp_range_c": [2, 8],
+  "excursion_budget_minutes": 480,
+  "status": "in_transit",
+  "original_route_id": "R-DIRECT"
+}

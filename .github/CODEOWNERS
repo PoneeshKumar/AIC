@@ -1,0 +1,19 @@
+# Handles are placeholders. Replace with real GitHub usernames.
+/core/                @poneesh
+/agent/run.py         @poneesh
+/agent/ledger.py      @poneesh
+/agent/verify.py      @poneesh
+/agent/planner.py     @poneesh
+/scripts/seed.py      @poneesh
+/mocks/               @dvij
+/chaos/               @dvij
+/server/              @dvij
+/ui/                  @dvij
+/data/seed/           @dvij
+/agent/memory.py      @dvij
+/agent/adapt.py       @dvij
+/docs/                @akil
+/README.md            @akil
+/HANDOFF.md           @akil
+/docs/CONTRACTS.md    @poneesh @dvij
+/core/models.py       @poneesh @dvij

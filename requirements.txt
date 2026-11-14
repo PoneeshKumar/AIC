@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic
+pymongo
+httpx
+python-dotenv
+voyageai
+anthropic
+langsmith
+pytest
+# Optional, only if CORE decides to use LangGraph checkpoints (see HANDOFF.md, "Key decisions"):
+# langgraph
+# langgraph-checkpoint-mongodb
