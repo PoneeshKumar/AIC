@@ -25,7 +25,7 @@ case "${1:-help}" in
              wait ;;
   server)    uvicorn server.app:app --port "$SERVER_PORT" --reload ;;
   agent)     shift; python -m agent.run "$@" ;;
-  seed)      PYTHONPATH=. python scripts/seed.py ;;
+  seed)      python -m scripts.seed ;;
   test)      pytest -q ;;
   *) echo "commands: check | carrier | warehouse | hospital | mocks | server | agent | seed | test" ;;
 esac
