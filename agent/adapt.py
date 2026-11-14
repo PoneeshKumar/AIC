@@ -3,7 +3,7 @@
 When a system answers in a shape we do not understand:
   1. Summarize the failure (system, endpoint, what we expected, what we got).
   2. recall() similar incidents.
-    3. Turn the closest recalled fix into a proposal for human approval.
+    3. Ask the LLM to propose a mapping from the failure and the recalled fixes. If it fails, reuse the closest recalled fix.
     4. Write a proposal document and STOP until a human approves it in the UI.
     5. On approval, store it as an `approved_rule` memory and apply it to the rest of the run.
 
@@ -38,8 +38,51 @@ def failure_signature(failure: dict) -> str:
     return hashlib.sha256(json.dumps(failure, sort_keys=True).encode()).hexdigest()
 
 
+ALLOWED_TRANSFORMS = {"epoch_seconds_to_iso"}  # keep in step with apply_rule
+
+PROMPT = """A system we integrate with changed its response shape. Propose a field mapping from our expected field names to dotted paths in the new response.
+Failure: {failure}
+Similar past incidents and their fixes: {recalled}
+Reply with JSON only: {{"fix": {{"map": {{"expected_field": "new.dotted.path"}}, "transform": {{"expected_field": "epoch_seconds_to_iso"}}}}, "reason": "one sentence"}}
+Allowed transforms: {transforms}. Only describe the field mapping."""
+
+
+def _ask_llm(prompt: str) -> str:
+    import os
+
+    import anthropic  # the SDK reads ANTHROPIC_API_KEY from the environment (.env is loaded by core.config)
+
+    # ponytail: core/config.py has no LLM settings, so read the model here. Move it there if Poneesh adds them.
+    model = os.getenv("LLM_MODEL") or "claude-opus-5-5"
+    reply = anthropic.Anthropic().messages.create(
+        model=model, max_tokens=2000, messages=[{"role": "user", "content": prompt}]
+    )
+    return next(b.text for b in reply.content if b.type == "text")  # skip any thinking block
+
+
+def _llm_fix(failure: dict, matches: list[dict]) -> dict | None:
+    """Ask the model for a mapping. Returns {"fix", "reason"} or None on any failure or bad shape."""
+    recalled = [{"summary": m.get("summary"), "fix": m.get("fix"), "score": round(float(m.get("score", 0)), 3)}
+                for m in matches]
+    try:
+        text = _ask_llm(PROMPT.format(failure=json.dumps(failure, sort_keys=True), recalled=json.dumps(recalled),
+                                      transforms=sorted(ALLOWED_TRANSFORMS)))
+        out = json.loads(text[text.index("{"): text.rindex("}") + 1])
+        fix = out["fix"]
+        mapping = fix["map"]
+        transform = fix.get("transform", {})
+        if not mapping or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+            return None
+        if not all(k in mapping and v in ALLOWED_TRANSFORMS for k, v in transform.items()):
+            return None
+        return {"fix": {"map": mapping, **({"transform": transform} if transform else {})},
+                "reason": str(out.get("reason", ""))}
+    except Exception:  # no key, bad model name, network, bad JSON: fall back to the recalled fix
+        return None
+
+
 def propose_fix(failure: dict) -> dict:
-    """Create a reviewable proposal from the closest approved incident memory."""
+    """Create a reviewable proposal. The model drafts it, a human approves it, code applies it."""
     system = failure.get("system", "unknown")
     query = json.dumps(failure, sort_keys=True)
     matches = recall(query, system)
@@ -48,14 +91,20 @@ def propose_fix(failure: dict) -> dict:
         if matches and float(matches[0].get("score", 0)) >= MIN_PROPOSAL_SCORE
         else None
     )
-    proposal = {
-        "summary": (
-            "Reuse the closest approved incident fix after human review"
-            if best_match
-            else "No matching incident found; provide a fix manually"
-        ),
-        "fix": best_match.get("fix", {}) if best_match else {},
-    }
+    drafted = _llm_fix(failure, matches)
+    if drafted:
+        proposal = {"summary": f"Model proposed this mapping. {drafted['reason']}".strip(), "fix": drafted["fix"],
+                    "source": "llm"}
+    else:
+        proposal = {
+            "summary": (
+                "Reuse the closest approved incident fix after human review"
+                if best_match
+                else "No matching incident found; provide a fix manually"
+            ),
+            "fix": best_match.get("fix", {}) if best_match else {},
+            "source": "recalled_fix",
+        }
     document = {
         "proposal_id": str(uuid.uuid4()),
         "failure": failure,
