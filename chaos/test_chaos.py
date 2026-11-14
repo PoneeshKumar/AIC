@@ -90,3 +90,13 @@ def test_kill_agent(monkeypatch):
     out = injector._kill_agent()
     assert out["killed_pid"] is None and bystander.poll() is None and len(spawned) == 2
     bystander.kill()
+
+
+def test_drop_targets_a_system_the_agent_will_write_to(monkeypatch):
+    from chaos import injector
+    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(shipments=FakeColl([{"shipment_id": "S"}])))
+    held = []
+    monkeypatch.setattr(injector.httpx, "get", lambda url, **kw: types.SimpleNamespace(json=lambda: held))
+    assert injector._drop_target() == "warehouse"
+    held.append({"reservation_id": "RES-1"})
+    assert injector._drop_target() == "hospital"

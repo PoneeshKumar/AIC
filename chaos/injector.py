@@ -100,6 +100,20 @@ def wake_agent() -> int | None:
     return _start_agent(ship["shipment_id"], w.get("worker_id", "worker-1")) if ship.get("shipment_id") else None
 
 
+def _drop_target() -> str:
+    """The system the agent will write to next, so the dropped response is really hit and shows on screen.
+
+    Once storage is held, a new run only writes to the hospital. Before that, the warehouse is the
+    interesting one, because a blind retry there would hold a second bay.
+    """
+    ship = get_db()[config.SHIPMENTS].find_one() or {}
+    try:
+        held = httpx.get(config.WAREHOUSE_URL + "/reservations", params={"shipment_id": ship.get("shipment_id", "")}, timeout=5).json()
+    except (httpx.HTTPError, ValueError):
+        held = []
+    return "hospital" if held else "warehouse"
+
+
 def fire(event: str, run_id: str | None = None, **kw) -> dict:
     run_id = run_id or _latest_run_id()
     if event == "cancel_flight":
@@ -111,9 +125,9 @@ def fire(event: str, run_id: str | None = None, **kw) -> dict:
         out = {**_post(config.CARRIER_URL + "/admin/schema", {"version": kw.get("version", 2)}), "agent_pid": wake_agent()}
         msg = f"chaos: carrier API switched to schema v{kw.get('version', 2)}"
     elif event == "drop_response":
-        system = kw.get("system", "warehouse")
-        out = _post(URLS[system] + "/admin/faults", {"drop_next_responses": 1})
-        msg = f"chaos: next {system} response will be dropped"
+        system = kw.get("system") or _drop_target()
+        out = {**_post(URLS[system] + "/admin/faults", {"drop_next_responses": 1}), "agent_pid": wake_agent()}
+        msg = f"chaos: next {system} response will be dropped" + (f", agent started as pid {out['agent_pid']}" if out["agent_pid"] else "")
     elif event == "kill_agent":
         out = _kill_agent()
         msg = (f"chaos: agent pid {out['killed_pid']} killed, restarted as {out['restarted_pid']}" if out["killed_pid"]
@@ -131,9 +145,8 @@ def random_run(seed: int, count: int = 5) -> list[dict]:
     for _ in range(count):
         time.sleep(rng.uniform(1, 4))
         ev = rng.choice(EVENTS)
-        kw = {"system": rng.choice(list(URLS))} if ev == "drop_response" else {}
         try:
-            results.append(fire(ev, **kw))
+            results.append(fire(ev))
         except Exception as e:  # keep attacking, a failed injection is itself a result
             results.append({"event": ev, "error": str(e)})
     return results
