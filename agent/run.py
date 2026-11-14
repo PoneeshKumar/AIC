@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from agent import ledger, planner, verify
+from agent import adapt, ledger, memory, planner, verify
 from core import config
 from core.db import ensure_indexes, get_db
 from core.models import Event, Step
@@ -45,7 +45,10 @@ def _heartbeat(db, worker_id: str) -> None:
 
 def _load_run(db, shipment_id: str) -> dict:
   run = db[config.RUNS].find_one(
-    {"shipment_id": shipment_id, "status": {"$in": ["running", "recovering"]}},
+    {"shipment_id": shipment_id, "$or": [
+      {"status": {"$in": ["running", "recovering"]}},
+      {"status": "blocked", "blocked_reason": "waiting_approval"},
+    ]},
     sort=[("created_at", -1)],
   )
   if run:
@@ -200,6 +203,58 @@ def _plan_if_needed(db, run: dict, shipment: dict, worker_id: str) -> None:
   })
 
 
+def _shape(value):
+  """Field names and nesting only, so the failure signature ignores per-shipment values."""
+  if isinstance(value, dict):
+    return {key: _shape(item) for key, item in sorted(value.items())}
+  return type(value).__name__
+
+
+def parse_carrier_status(db, run_id: str, worker_id: str, shipment_id: str) -> dict | None:
+  """Return the normalized carrier status, or None when the run must wait for a human.
+
+  Schema v1 parses directly. Anything else tries approved rules first, then proposes a fix and stops.
+  """
+  response = httpx.get(f"{config.CARRIER_URL}/shipments/{shipment_id}", timeout=10)
+  response.raise_for_status()
+  raw = response.json()
+  if "shipment_status" in raw and "eta" in raw:
+    return {"shipment_status": raw["shipment_status"], "eta": raw["eta"]}
+
+  for rule in memory.find_approved_rules("carrier"):
+    try:
+      translated = adapt.apply_rule(rule["fix"], raw)
+    except (KeyError, ValueError, TypeError, OSError, OverflowError):
+      continue
+    _event(db, run_id, worker_id, "memory_hit", "applied stored carrier rule, no approval needed", {
+      "memory_id": rule["_id"], "translated": translated,
+    })
+    return translated
+
+  failure = {
+    "system": "carrier",
+    "endpoint": "GET /shipments/{id}",
+    "expected": ["eta", "shipment_status"],
+    "got": _shape(raw),
+  }
+  proposal = adapt.propose_fix(failure)
+  if not db[config.EVENTS].find_one({"run_id": run_id, "data.proposal_id": proposal["proposal_id"]}):
+    matches = proposal.get("matches") or []
+    if matches:
+      _event(db, run_id, worker_id, "memory_hit",
+             f"memory hit ({float(matches[0].get('score', 0)):.2f}) for carrier drift", {
+               "proposal_id": proposal["proposal_id"], "memory_id": matches[0].get("_id"),
+               "score": matches[0].get("score"),
+             })
+    _event(db, run_id, worker_id, "proposal", "carrier response changed, waiting for human approval", {
+      "proposal_id": proposal["proposal_id"], "fix": proposal["proposal"]["fix"],
+    })
+  db[config.RUNS].update_one({"run_id": run_id}, {"$set": {
+    "status": "blocked", "blocked_reason": "waiting_approval", "updated_at": _now(),
+  }})
+  return None
+
+
 def run(shipment_id: str, worker_id: str = "worker-1") -> str:
   """Run one shipment recovery until it completes or needs a retry."""
   ensure_indexes()
@@ -212,6 +267,19 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
   run_id = run_document["run_id"]
   _event(db, run_id, worker_id, "start", f"started recovery for {shipment_id}")
   _resume_sent(db, run_id, worker_id)
+  try:
+    carrier_status = parse_carrier_status(db, run_id, worker_id, shipment_id)
+  except httpx.HTTPError as exc:
+    _event(db, run_id, worker_id, "send", "carrier status read failed, continuing", {"error": str(exc)})
+    carrier_status = {}
+  if carrier_status is None:
+    _event(db, run_id, worker_id, "finish", "recovery blocked: waiting for approval")
+    return run_id
+  db[config.RUNS].update_one({"run_id": run_id}, {"$set": {"carrier_status": carrier_status}})
+  db[config.RUNS].update_one(
+    {"run_id": run_id, "blocked_reason": "waiting_approval"},
+    {"$set": {"status": "recovering", "updated_at": _now()}, "$unset": {"blocked_reason": ""}},
+  )
   _plan_if_needed(db, run_document, shipment, worker_id)
 
   while True:

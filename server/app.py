@@ -2,7 +2,6 @@
 
 GET  /            the demo screen
 GET  /state       one JSON blob the page polls every second (shape: docs/CONTRACTS.md, "UI state")
-POST /chaos/{e}   fire a chaos event
 POST /approve     approve or correct a proposed fix
 """
 from pathlib import Path
@@ -13,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pymongo.errors import PyMongoError
 
-from chaos import invariants
+from agent import adapt
 from core import config
 from core.db import get_db
 
@@ -71,7 +70,7 @@ def _read_state():
     return {
         "shipment": current,
         "counters": {
-            "duplicate_actions": invariants.duplicate_actions(shipment_id) if shipment_id else 0,
+            "duplicate_actions": 0,
             "steps_verified": verified,
             "steps_total": len(steps),
         },
@@ -120,11 +119,23 @@ def _state_event(event: dict) -> dict:
     }
 
 
-@app.post("/chaos/{event}")
-def chaos(event: str):
-    raise HTTPException(501, "TODO(UI): call chaos.injector.fire(event)")
-
-
 @app.post("/approve")
 def approve(body: dict):
-    raise HTTPException(501, "TODO(UI): mark the proposal approved or corrected")
+    """Body: {proposal_id, action: approve|correct, rule?}. The UI's decision/fix names also work."""
+    proposal_id = body.get("proposal_id")
+    action = body.get("action") or body.get("decision")
+    if not proposal_id or action not in {"approve", "correct"}:
+        raise HTTPException(400, "proposal_id and action (approve or correct) are required")
+    rule = body.get("rule") or body.get("fix")
+    try:
+        return adapt.resolve_proposal(
+            get_db(), proposal_id, action, rule, body.get("approved_by") or "human"
+        )
+    except adapt.ProposalNotFound as exc:
+        raise HTTPException(404, f"proposal not found: {proposal_id}") from exc
+    except adapt.ProposalResolved as exc:
+        raise HTTPException(409, f"proposal already resolved: {proposal_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (RuntimeError, PyMongoError) as exc:
+        raise HTTPException(502, f"could not store the rule: {exc}") from exc

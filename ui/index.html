@@ -2,45 +2,289 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ColdTrace</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 1100px }
-  .row { display: flex; gap: 12px; margin-bottom: 12px }
-  .card { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 12px }
-  .big { font-size: 28px }
-  pre { background: #f5f5f5; padding: 12px; border-radius: 8px; min-height: 120px }
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #14181f; --muted: #5b6573; --line: #d9dee5;
+    --ok: #17794a; --warn: #9a6200; --bad: #b3261e; --info: #1f5fbf;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151b; --card: #1a2029; --ink: #eef1f5; --muted: #9aa5b4; --line: #2c3541;
+            --ok: #4cc38a; --warn: #e3a93b; --bad: #ff7b72; --info: #6ea8ff; }
+  }
+  * { box-sizing: border-box }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); overflow-x: hidden }
+  body { font: 18px/1.4 system-ui, sans-serif; padding: 16px; max-width: 1200px; margin: 0 auto }
+  h1 { font-size: 24px; margin: 0 }
+  h2 { font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 12px }
+  #shipment-status { color: var(--muted) }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0 }
+  .grid { display: grid; gap: 12px; margin-bottom: 12px }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)) }
+  .main { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) }
+  .stat .num { font-size: 40px; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere }
+  .stat .label { color: var(--muted); font-size: 14px }
+  .stat.dupes.nonzero { border-color: var(--bad) }
+  .stat.dupes.nonzero .num { color: var(--bad) }
+  .stat.dupes.zero .num { color: var(--ok) }
+  #banner { display: none; background: var(--bad); color: #fff; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px; font-weight: 600 }
+  #banner.show { display: block }
+  ol#steps { list-style: none; margin: 0; padding: 0 }
+  #steps li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: start;
+             padding: 10px 0; border-top: 1px solid var(--line) }
+  #steps li:first-child { border-top: 0 }
+  .seq { color: var(--muted); font-variant-numeric: tabular-nums }
+  .act { font-weight: 600; overflow-wrap: anywhere }
+  .sys { color: var(--muted); font-size: 14px }
+  .reason { grid-column: 2 / 4; color: var(--muted); font-size: 15px; overflow-wrap: anywhere }
+  .badge { font-size: 14px; font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap }
+  .s-planned { color: var(--muted) } .s-sent { color: var(--info) } .s-verified { color: var(--ok) }
+  .s-failed { color: var(--bad) } .s-skipped { color: var(--warn) }
+  #systems { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px }
+  .sysbox { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0 }
+  .sysbox b { display: block }
+  .sysbox .detail { color: var(--muted); font-size: 14px; overflow-wrap: anywhere }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--bad) }
+  .up .dot { background: var(--ok) }
+  button { font: inherit; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
+           color: var(--ink); cursor: pointer; min-height: 44px }
+  button:hover:not(:disabled) { border-color: var(--info) }
+  button:disabled { opacity: .5; cursor: not-allowed }
+  button.primary { background: var(--info); color: #fff; border-color: var(--info) }
+  #feedback { color: var(--muted); font-size: 15px; flex-basis: 100%; min-height: 1.4em }
+  #feedback.err { color: var(--bad) }
+  #proposal { display: none; border-color: var(--info) }
+  #proposal.show { display: block }
+  #proposal pre, #fixtext { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0;
+                            white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.4 ui-monospace, monospace }
+  #fixtext { display: none; width: 100%; min-height: 120px; color: var(--ink) }
+  #fixtext.show { display: block }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px }
+  #log { max-height: 320px; overflow-y: auto; font: 15px/1.5 ui-monospace, monospace; margin: 0; padding: 0; list-style: none }
+  #log li { padding: 2px 0; overflow-wrap: anywhere }
+  #log .ts { color: var(--muted); margin-right: 8px }
+  .empty { color: var(--muted) }
+  @media (max-width: 760px) {
+    body { font-size: 16px }
+    .stats { grid-template-columns: 1fr 1fr 1fr; gap: 8px }
+    .stat .num { font-size: 28px }
+    .main { grid-template-columns: minmax(0, 1fr) }
+    #systems { grid-template-columns: minmax(0, 1fr) }
+  }
 </style>
 </head>
 <body>
-<!-- Owner: UI. Layout target is the mockup in HANDOFF.md, "Demo screen". Plain HTML, no build step. -->
-<h2 id="shipment">Shipment</h2>
-<div class="row">
-  <div class="card">Budget remaining<div class="big" id="budget">--</div></div>
-  <div class="card">Duplicate actions<div class="big" id="dupes">--</div></div>
-  <div class="card">Steps verified<div class="big" id="verified">--</div></div>
+<header>
+  <h1>ColdTrace</h1>
+  <span id="shipment-id">No shipment</span>
+  <span id="shipment-status"></span>
+</header>
+
+<div id="banner" role="alert"></div>
+
+<div class="grid stats">
+  <div class="card stat"><div class="label">Budget remaining</div><div class="num" id="budget">--</div></div>
+  <div class="card stat dupes zero" id="dupebox"><div class="label">Duplicate actions</div><div class="num" id="dupes">--</div></div>
+  <div class="card stat"><div class="label">Steps verified</div><div class="num" id="verified">--</div></div>
 </div>
-<div class="row">
-  <div class="card" id="plan">Recovery plan (planned, sent, verified)</div>
-  <div class="card" id="systems">Systems (carrier, warehouse, hospital, agent)</div>
+
+<div class="card" id="proposal" style="margin-bottom:12px">
+  <h2>Proposed fix, waiting for a person</h2>
+  <div id="prop-summary"></div>
+  <pre id="prop-fix"></pre>
+  <textarea id="fixtext" aria-label="Corrected fix as JSON" spellcheck="false"></textarea>
+  <div class="actions">
+    <button class="primary" id="approve">Approve</button>
+    <button id="correct">Correct</button>
+    <button id="submit-correct" style="display:none">Send correction</button>
+    <button id="cancel-correct" style="display:none">Cancel</button>
+  </div>
+  <div id="prop-feedback" class="empty"></div>
 </div>
-<div class="row">
-  <button data-event="cancel_flight">Cancel flight</button>
-  <button data-event="kill_agent">Kill agent</button>
-  <button data-event="change_carrier">Change carrier API</button>
-  <button data-event="random">Random chaos</button>
+
+<div class="grid main">
+  <div class="card"><h2>Recovery plan</h2><ol id="steps"><li class="empty">No steps yet</li></ol></div>
+  <div class="card"><h2>Systems</h2><div id="systems"></div></div>
 </div>
-<pre id="log">event log</pre>
+
+<div class="card"><h2>Event log</h2><ul id="log"><li class="empty">No events yet</li></ul></div>
+
 <script>
-// TODO(UI): render /state into the elements above. Poll once a second.
+const $ = id => document.getElementById(id)
+const STATUSES = ['planned', 'sent', 'verified', 'failed', 'skipped']
+let editing = false
+let lastProposalKey = null
+
+function mk(tag, cls, text) {
+  const e = document.createElement(tag)
+  if (cls) e.className = cls
+  if (text !== undefined) e.textContent = text
+  return e
+}
+
+function showBanner(msg) {
+  const b = $('banner')
+  b.textContent = msg || ''
+  b.classList.toggle('show', !!msg)
+}
+
+function fmtTs(ts) {
+  if (!ts) return ''
+  const m = String(ts).match(/T(\d\d:\d\d:\d\d)/)
+  return m ? m[1] : String(ts)
+}
+
+function renderSteps(steps) {
+  const ol = $('steps')
+  ol.replaceChildren()
+  if (!steps.length) { ol.append(mk('li', 'empty', 'No steps yet')); return }
+  for (const s of steps) {
+    const li = mk('li')
+    li.append(mk('span', 'seq', String(s.seq)))
+    const body = mk('div')
+    body.append(mk('div', 'act', s.action || ''), mk('div', 'sys', s.system || ''))
+    const st = STATUSES.includes(s.status) ? s.status : 'planned'
+    li.append(body, mk('span', 'badge s-' + st, s.status || 'planned'))
+    if (s.reason) li.append(mk('div', 'reason', s.reason))
+    ol.append(li)
+  }
+}
+
+function sysDetail(name, v) {
+  if (name === 'carrier' && v.schema_version != null) return 'Schema version ' + v.schema_version
+  if (name === 'warehouse' && v.reservations != null) return v.reservations + ' reservations'
+  if (name === 'agent') return v.worker ? v.worker + (v.alive ? ' is alive' : ' has stopped') : 'No worker seen'
+  return v.ok ? 'Reachable' : 'Not reachable'
+}
+
+function renderSystems(systems) {
+  const box = $('systems')
+  box.replaceChildren()
+  for (const name of ['carrier', 'warehouse', 'hospital', 'agent']) {
+    const v = systems[name] || {}
+    const up = name === 'agent' ? !!v.alive : !!v.ok
+    const d = mk('div', 'sysbox ' + (up ? 'up' : 'down'))
+    const b = mk('b')
+    b.append(mk('span', 'dot'), document.createTextNode(name[0].toUpperCase() + name.slice(1) + (up ? ' up' : ' down')))
+    d.append(b, mk('div', 'detail', sysDetail(name, v)))
+    box.append(d)
+  }
+}
+
+function renderLog(log) {
+  const ul = $('log')
+  const atBottom = ul.scrollTop + ul.clientHeight >= ul.scrollHeight - 8
+  ul.replaceChildren()
+  if (!log.length) { ul.append(mk('li', 'empty', 'No events yet')); return }
+  for (const e of log) {
+    const li = mk('li')
+    li.append(mk('span', 'ts', fmtTs(e.ts)), document.createTextNode(e.message || ''))
+    ul.append(li)
+  }
+  if (atBottom) ul.scrollTop = ul.scrollHeight
+}
+
+function proposalId(p) { return p.proposal_id || p.id || null }
+
+function renderProposal(p) {
+  const card = $('proposal')
+  if (!p) { card.classList.remove('show'); editing = false, lastProposalKey = null; return }
+  card.classList.add('show')
+  const key = JSON.stringify(p)
+  if (key === lastProposalKey) return
+  lastProposalKey = key
+  $('prop-summary').textContent = p.summary || (p.proposal && p.proposal.summary) || p.reason || 'The agent proposes a fix.'
+  const fix = p.fix !== undefined ? p.fix : (p.proposal && p.proposal.fix !== undefined ? p.proposal.fix : {})
+  $('prop-fix').textContent = JSON.stringify(fix, null, 2)
+  if (!editing) $('fixtext').value = JSON.stringify(fix, null, 2)
+}
+
+function render(s) {
+  const sh = s.shipment || {}, c = s.counters || {}
+  $('shipment-id').textContent = sh.shipment_id || 'No shipment'
+  $('shipment-status').textContent = sh.status ? 'Status: ' + sh.status : ''
+  $('budget').textContent = sh.budget_remaining_min != null ? sh.budget_remaining_min + ' min' : '--'
+  const d = c.duplicate_actions
+  $('dupes').textContent = d != null ? d : '--'
+  $('dupebox').className = 'card stat dupes ' + (d ? 'nonzero' : 'zero')
+  $('verified').textContent = (c.steps_verified ?? 0) + ' of ' + (c.steps_total ?? 0)
+  renderSteps(s.steps || [])
+  renderSystems(s.systems || {})
+  renderProposal(s.proposal)
+  renderLog(s.log || [])
+}
+
 async function poll() {
   try {
-    const res = await fetch('/state')
-    if (res.ok) { document.getElementById('log').textContent = JSON.stringify(await res.json(), null, 2) }
-  } catch (e) {}
+    const res = await fetch('/state', { cache: 'no-store' })
+    if (res.status === 503) {
+      let detail = 'Atlas is unavailable.'
+      try { detail = (await res.json()).detail || detail } catch (e) {}
+      showBanner('Atlas is down (503). ' + detail + ' The screen shows the last known state.')
+      return
+    }
+    if (!res.ok) { showBanner('State request failed with status ' + res.status + '.'); return }
+    showBanner('')
+    render(await res.json())
+  } catch (e) {
+    showBanner('Cannot reach the ColdTrace server. Retrying every second.')
+  }
 }
-document.querySelectorAll('button[data-event]').forEach(b => {
-  b.onclick = () => fetch('/chaos/' + b.dataset.event, { method: 'POST' })
-})
+
+async function readReply(res) {
+  let body = null
+  try { body = await res.json() } catch (e) {}
+  return body
+}
+
+// Approval payload: {proposal_id, decision: "approve" | "correct", approved_by: "human", fix: {...}}
+// fix is the proposal's fix as shown for approve, or the edited JSON for correct.
+const propButtons = ['approve', 'correct', 'submit-correct', 'cancel-correct'].map($)
+function setEditing(on) {
+  editing = on
+  $('fixtext').classList.toggle('show', on)
+  $('prop-fix').style.display = on ? 'none' : ''
+  $('approve').style.display = $('correct').style.display = on ? 'none' : ''
+  $('submit-correct').style.display = $('cancel-correct').style.display = on ? '' : 'none'
+}
+$('correct').onclick = () => setEditing(true)
+$('cancel-correct').onclick = () => {
+  setEditing(false)
+  lastProposalKey = null
+  $('prop-feedback').textContent = ''
+}
+
+async function sendDecision(decision) {
+  const f = $('prop-feedback')
+  let fix
+  try { fix = JSON.parse(decision === 'correct' ? $('fixtext').value : $('prop-fix').textContent) }
+  catch (e) { f.textContent = 'The fix is not valid JSON. Edit it and try again.'; return }
+  let id = null
+  try { id = proposalId(JSON.parse(lastProposalKey)) } catch (e) {}
+  propButtons.forEach(x => x.disabled = true)
+  f.textContent = 'Sending...'
+  try {
+    const res = await fetch('/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposal_id: id, decision, approved_by: 'human', fix })
+    })
+    const body = await readReply(res)
+    if (res.ok) { f.textContent = decision === 'correct' ? 'Correction sent.' : 'Approval sent.'; setEditing(false) }
+    else f.textContent = 'Failed: ' + ((body && body.detail) || 'status ' + res.status)
+  } catch (e) {
+    f.textContent = 'Failed: server unreachable.'
+  } finally {
+    propButtons.forEach(x => x.disabled = false)
+    poll()
+  }
+}
+$('approve').onclick = () => sendDecision('approve')
+$('submit-correct').onclick = () => sendDecision('correct')
+
+poll()
 setInterval(poll, 1000)
 </script>
 </body>

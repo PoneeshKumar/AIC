@@ -31,7 +31,6 @@ def test_state_assembles_contract(monkeypatch):
     })
     monkeypatch.setattr(server, "get_db", lambda: db)
     monkeypatch.setattr(server, "_health", lambda _: {"ok": True})
-    monkeypatch.setattr(server.invariants, "duplicate_actions", lambda _: 0)
 
     response = TestClient(server.app).get("/state")
 

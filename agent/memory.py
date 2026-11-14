@@ -91,3 +91,11 @@ def correct(memory_id: str, corrected_fix: dict, approved_by: str) -> str:
     if result.matched_count != 1:
         raise RuntimeError(f"memory was corrected concurrently: {memory_id}")
     return replacement_id
+
+
+def find_approved_rules(system: str) -> list[dict]:
+    """Active human-approved rules for a system, newest first. Plain query, no embedding needed."""
+    rules = get_db()[config.MEMORIES].find(
+        {"system": system, "kind": "approved_rule", "active": True}
+    ).sort("created_at", -1)
+    return [{**rule, "_id": str(rule["_id"])} for rule in rules]

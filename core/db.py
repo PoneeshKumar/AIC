@@ -36,6 +36,11 @@ def ensure_indexes():
     db[config.STEPS].create_index([("run_id", ASCENDING), ("seq", ASCENDING)])
     db[config.EVENTS].create_index([("run_id", ASCENDING), ("ts", ASCENDING)])
     db[config.WORKERS].create_index([("worker_id", ASCENDING)], unique=True)
+    db[config.PROPOSALS].create_index(
+        [("signature", ASCENDING)],
+        unique=True,
+        partialFilterExpression={"status": "pending"},
+    )
     ensure_memory_vector_index(db)
 
 
