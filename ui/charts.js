@@ -73,8 +73,8 @@ window.Charts = (() => {
       const stops = [r.legs[0].from, ...r.legs.filter(l => l.kind !== 'layover').map(l => l.to)]
       const lines = [r.route_id + (r.original ? ' (original)' : ''), stops.join(' to '), `Transit ${dur(r.total_min)}`,
         `Cooled ${dur(cooled)}`, `Exposed ${dur(r.exposed_min)}` + (budgetLeft != null ? ` of ${dur(budgetLeft)} left` : ''), status]
-      g.addEventListener('mousemove', e => { tip.show(lines, e.clientX, e.clientY); onHover && onHover(r.route_id) })
-      g.addEventListener('mouseleave', () => { tip.hide(); onHover && onHover(null) })
+      for (const ev of ['pointerdown', 'pointermove']) g.addEventListener(ev, e => { tip.show(lines, e.clientX, e.clientY); onHover && onHover(r.route_id) })
+      g.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { tip.hide(); onHover && onHover(null) } })
       svg.append(g)
     })
     el.replaceChildren(svg)
@@ -138,12 +138,16 @@ window.Charts = (() => {
       cross.setAttribute('visibility', 'visible')
       tip.show([clock(samples[best].t), `${dur(samples[best].v)} remaining`], clientX, clientY)
     }
-    hit.addEventListener('mousemove', e => { burnHover = [e.clientX, e.clientY]; at(e.clientX, e.clientY) })
-    hit.addEventListener('mouseleave', () => { burnHover = null; cross.setAttribute('visibility', 'hidden'); tip.hide() })
+    hit.addEventListener('pointerdown', e => { burnHover = [e.clientX, e.clientY]; at(e.clientX, e.clientY) })
+    hit.addEventListener('pointermove', e => { burnHover = [e.clientX, e.clientY]; at(e.clientX, e.clientY) })
+    hit.addEventListener('pointerleave', e => { if (e.pointerType !== 'mouse') return; burnHover = null; cross.setAttribute('visibility', 'hidden'); tip.hide() })
     svg.append(hit)
     el.replaceChildren(svg)
     if (burnHover) at(...burnHover)
   }
+
+  // Touch has no hover: tapping anywhere outside a chart dismisses the tooltip.
+  document.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' && !e.target.closest('.routes-chart, .burn-chart')) tip.hide() })
 
   return { routes, routesTable, burn, dur }
 })()
