@@ -1,17 +1,186 @@
 {
-  "_note": "Synthetic incident history for the failure memory. Write 15 to 20 of these during the event. Vary the wording so retrieval is a real test.",
+  "_note": "Synthetic incident history for the failure memory (20 incidents). All invented.",
   "incidents": [
-    {"system": "carrier", "kind": "incident_fix",
-     "summary": "Carrier tracking endpoint stopped returning shipment_status and eta at the top level. Fields moved under a tracking object and the time became epoch seconds.",
-     "fix": {"map": {"shipment_status": "tracking.state", "eta": "tracking.estimated_arrival_epoch"}, "transform": {"eta": "epoch_seconds_to_iso"}}},
-    {"system": "warehouse", "kind": "incident_fix",
-     "summary": "Warehouse reservation call timed out but the bay was actually held. Retrying created a second hold.",
-     "fix": {"rule": "after a timeout, read reservations by shipment before any retry"}},
-    {"system": "carrier", "kind": "incident_fix",
-     "summary": "Carrier renamed booking status values from lowercase words to uppercase codes.",
-     "fix": {"map_values": {"confirmed": "CONFIRMED", "pending": "PENDING"}}},
-    {"system": "hospital", "kind": "incident_fix",
-     "summary": "Hospital receiving rejected delivery updates without a timezone on the arrival time.",
-     "fix": {"rule": "always send arrival times in UTC with an explicit offset"}}
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Carrier tracking endpoint stopped returning shipment_status and eta at the top level. Fields moved under a tracking object and the time became epoch seconds.",
+      "fix": {
+        "map": {
+          "shipment_status": "tracking.state",
+          "eta": "tracking.estimated_arrival_epoch"
+        },
+        "transform": {
+          "eta": "epoch_seconds_to_iso"
+        }
+      }
+    },
+    {
+      "system": "warehouse",
+      "kind": "incident_fix",
+      "summary": "Warehouse reservation call timed out but the bay was actually held. Retrying created a second hold.",
+      "fix": {
+        "rule": "after a timeout, read reservations by shipment before any retry"
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Carrier renamed booking status values from lowercase words to uppercase codes.",
+      "fix": {
+        "map_values": {
+          "confirmed": "CONFIRMED",
+          "pending": "PENDING"
+        }
+      }
+    },
+    {
+      "system": "hospital",
+      "kind": "incident_fix",
+      "summary": "Hospital receiving rejected delivery updates without a timezone on the arrival time.",
+      "fix": {
+        "rule": "always send arrival times in UTC with an explicit offset"
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Tracking response no longer has a flat eta string. Arrival is now a unix timestamp nested in a tracking block.",
+      "fix": {
+        "map": {
+          "eta": "tracking.estimated_arrival_epoch"
+        },
+        "transform": {
+          "eta": "epoch_seconds_to_iso"
+        }
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Carrier status field vanished from the top level after an API upgrade. A state value now sits inside a tracking object in capital letters.",
+      "fix": {
+        "map": {
+          "shipment_status": "tracking.state"
+        }
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Booking lookup started returning 404 for shipments that were booked. The carrier moved bookings to a new path.",
+      "fix": {
+        "rule": "read the bookings list by shipment id before concluding a booking is missing"
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Carrier rate limited us during a mass cancellation and returned 429 for route searches.",
+      "fix": {
+        "rule": "back off and retry route search, never rebook until the search succeeds"
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Carrier booking confirmation arrived twice with different booking ids after a gateway retry.",
+      "fix": {
+        "rule": "send a stable Idempotency-Key on every booking"
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "ETA came back in local time with no zone, which made arrivals look hours early.",
+      "fix": {
+        "rule": "treat carrier times as UTC only when they carry an explicit offset"
+      }
+    },
+    {
+      "system": "carrier",
+      "kind": "incident_fix",
+      "summary": "Route list returned cancelled flights for a few minutes after the cancellation.",
+      "fix": {
+        "rule": "re-read routes right before booking"
+      }
+    },
+    {
+      "system": "warehouse",
+      "kind": "incident_fix",
+      "summary": "Capacity endpoint returned bays as a count in one release and as a list of ids in the next.",
+      "fix": {
+        "map": {
+          "free": "bays"
+        },
+        "transform": {}
+      }
+    },
+    {
+      "system": "warehouse",
+      "kind": "incident_fix",
+      "summary": "Reservation was created but the response was lost in transit, so the agent tried again and held a second bay.",
+      "fix": {
+        "rule": "after a lost response, read reservations by shipment before any retry"
+      }
+    },
+    {
+      "system": "warehouse",
+      "kind": "incident_fix",
+      "summary": "Warehouse accepted a reservation window that started in the past and silently shifted it.",
+      "fix": {
+        "rule": "verify the held window matches the requested window"
+      }
+    },
+    {
+      "system": "warehouse",
+      "kind": "incident_fix",
+      "summary": "Reservation status changed from held to HELD_CONFIRMED after a vendor update.",
+      "fix": {
+        "map_values": {
+          "held": "HELD_CONFIRMED"
+        }
+      }
+    },
+    {
+      "system": "warehouse",
+      "kind": "incident_fix",
+      "summary": "Cold storage bay was released at midnight by an automatic cleanup and the shipment arrived with no space.",
+      "fix": {
+        "rule": "re-read the reservation shortly before arrival"
+      }
+    },
+    {
+      "system": "hospital",
+      "kind": "incident_fix",
+      "summary": "Hospital portal began rejecting delivery updates that used a status word it did not know.",
+      "fix": {
+        "rule": "use only the status words the portal lists"
+      }
+    },
+    {
+      "system": "hospital",
+      "kind": "incident_fix",
+      "summary": "Hospital delivery record kept the old arrival time after our update returned success.",
+      "fix": {
+        "rule": "read the delivery back and compare the arrival time"
+      }
+    },
+    {
+      "system": "hospital",
+      "kind": "incident_fix",
+      "summary": "Hospital endpoint timed out during a maintenance window and the update may or may not have landed.",
+      "fix": {
+        "rule": "read the delivery record before sending the update again"
+      }
+    },
+    {
+      "system": "hospital",
+      "kind": "incident_fix",
+      "summary": "Arrival time sent as epoch seconds was read as milliseconds and landed in 1970.",
+      "fix": {
+        "rule": "send arrival times as ISO 8601 UTC strings"
+      }
+    }
   ]
 }
