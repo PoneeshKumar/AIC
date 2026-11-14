@@ -88,6 +88,25 @@ def test_correct_supersedes_original(db, monkeypatch):
     assert db[config.MEMORIES].find_one({"kind": "approved_rule"})["fix"] == fixed
 
 
+def test_correcting_a_model_draft_keeps_the_recalled_memory(db, monkeypatch):
+    original = db[config.MEMORIES].insert_one(
+        {"kind": "incident_fix", "system": "carrier", "summary": "old", "active": True,
+         "superseded_by": None, "fix": {}}).inserted_id
+    carrier_returns(monkeypatch, V2)
+    monkeypatch.setattr(adapt, "recall", lambda q, s: [
+        {"_id": str(original), "kind": "incident_fix", "score": 0.9, "fix": {}}])
+    monkeypatch.setattr(adapt, "_ask_llm", lambda prompt: '{"fix": {"map": {"eta": "tracking.eta"}}, "reason": "moved"}')
+    parse(db)
+    proposal = db[config.PROPOSALS].find_one()
+    assert proposal["proposal"]["source"] == "llm" and "memory_id" not in proposal["proposal"]
+    fixed = {"map": {"shipment_status": "tracking.state"}}
+    response = TestClient(server.app).post(
+        "/approve", json={"proposal_id": proposal["proposal_id"], "action": "correct", "rule": fixed})
+    assert response.json()["status"] == "corrected"
+    assert db[config.MEMORIES].find_one({"_id": original})["active"] is True  # the draft did not come from it
+    assert db[config.MEMORIES].find_one({"kind": "approved_rule"})["fix"] == fixed
+
+
 def test_approve_missing_resolved_and_bad_body(db, monkeypatch):
     carrier_returns(monkeypatch, V2)
     parse(db)

@@ -68,15 +68,25 @@ def test_ledger_flags_phantom_step(monkeypatch):
 def test_kill_agent(monkeypatch):
     import subprocess, core.db
     from chaos import injector
-    victim = subprocess.Popen(["sleep", "60"])
-    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(workers=FakeColl([
-        {"pid": 1, "alive": False}, {"pid": victim.pid, "alive": True}])))
+    from datetime import datetime, timedelta, timezone
+    victim, bystander = subprocess.Popen(["sleep", "60"]), subprocess.Popen(["sleep", "60"])  # before Popen is faked
+    now = datetime.now(timezone.utc)
+    worker = {"pid": victim.pid, "worker_id": "w7", "heartbeat": now}
+    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(
+        workers=FakeColl([worker]), runs=FakeColl([{"run_id": "r", "shipment_id": "BIO-2048"}])))
     monkeypatch.setattr(injector.time, "sleep", lambda s: None)
     spawned = []
-    def fake_popen(*a, **k):
-        spawned.append(a)
+    def fake_popen(argv, **k):
+        spawned.append(argv)
         return types.SimpleNamespace(pid=99)
     monkeypatch.setattr(injector.subprocess, "Popen", fake_popen)
     out = injector._kill_agent()
     victim.wait(timeout=3)
-    assert victim.returncode == -9 and out["killed_pid"] == victim.pid and spawned
+    assert victim.returncode == -9 and out["killed_pid"] == victim.pid
+    assert spawned[0][-4:] == ["--shipment", "BIO-2048", "--worker-id", "w7"]
+
+    # A stale heartbeat means the pid may no longer be ours: kill nothing, still restart.
+    worker.update(pid=bystander.pid, heartbeat=now - timedelta(minutes=5))
+    out = injector._kill_agent()
+    assert out["killed_pid"] is None and bystander.poll() is None and len(spawned) == 2
+    bystander.kill()

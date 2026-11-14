@@ -84,8 +84,18 @@ def _llm_fix(failure: dict, matches: list[dict]) -> dict:
 def propose_fix(failure: dict) -> dict:
     """Create a reviewable proposal. The model drafts it, a human approves it, code applies it."""
     system = failure.get("system", "unknown")
+    collection = get_db()[config.PROPOSALS]
+    signature = failure_signature(failure)
+    pending = collection.find_one({"signature": signature, "status": "pending"})
+    if pending:  # already waiting on a human, so do not call Voyage or the model again
+        pending["_id"] = str(pending["_id"])
+        return pending
     query = json.dumps(failure, sort_keys=True)
-    matches = recall(query, system)
+    recall_error = None
+    try:
+        matches = recall(query, system)
+    except Exception as exc:  # Voyage or the vector index is down: still propose, with no memory to lean on
+        matches, recall_error = [], f"{type(exc).__name__}: {str(exc)[:150]}"
     best_match = (
         matches[0]
         if matches and float(matches[0].get("score", 0)) >= MIN_PROPOSAL_SCORE
@@ -100,7 +110,7 @@ def propose_fix(failure: dict) -> dict:
             "summary": (
                 "Reuse the closest approved incident fix after human review"
                 if best_match
-                else "No matching incident found; provide a fix manually"
+                else "No matching incident found, so provide a fix manually"
             ),
             "fix": best_match.get("fix", {}) if best_match else {},
             "source": "recalled_fix",
@@ -108,6 +118,7 @@ def propose_fix(failure: dict) -> dict:
         }
         if best_match:
             proposal["summary"] = "Model unavailable, reused the closest approved incident fix after human review"
+            proposal["memory_id"] = best_match.get("_id")  # the memory this draft was copied from
     document = {
         "proposal_id": str(uuid.uuid4()),
         "failure": failure,
@@ -115,8 +126,8 @@ def propose_fix(failure: dict) -> dict:
         "proposal": proposal,
         "created_at": datetime.now(timezone.utc),
     }
-    collection = get_db()[config.PROPOSALS]
-    signature = failure_signature(failure)
+    if recall_error:
+        document["recall_error"] = recall_error
     try:
         result = collection.find_one_and_update(
             {"signature": signature, "status": "pending"},
@@ -132,6 +143,19 @@ def propose_fix(failure: dict) -> dict:
     return result
 
 
+def _check_rule(rule) -> None:
+    """Raise ValueError unless apply_rule can run this rule. A stored bad rule would break every later run."""
+    if not isinstance(rule, dict) or not isinstance(rule.get("map"), dict) or not rule["map"]:
+        raise ValueError("a rule with a non-empty map is required")
+    if not all(isinstance(k, str) and isinstance(v, str) and v for k, v in rule["map"].items()):
+        raise ValueError("every map entry must be a field name and a dotted path")
+    transform = rule.get("transform", {})
+    if not isinstance(transform, dict) or not all(
+        k in rule["map"] and isinstance(v, str) and v in ALLOWED_TRANSFORMS for k, v in transform.items()
+    ):
+        raise ValueError(f"transform must name a mapped field and one of {sorted(ALLOWED_TRANSFORMS)}")
+
+
 def resolve_proposal(
     db, proposal_id: str, action: str, rule: dict | None = None, approved_by: str = "human"
 ) -> dict:
@@ -144,8 +168,7 @@ def resolve_proposal(
         raise ProposalNotFound(proposal_id)
     if action == "approve":
         rule = proposal.get("proposal", {}).get("fix") or {}
-    if not isinstance(rule, dict) or not isinstance(rule.get("map"), dict) or not rule["map"]:
-        raise ValueError("a rule with a non-empty map is required")
+    _check_rule(rule)
 
     status = "approved" if action == "approve" else "corrected"
     claimed = collection.find_one_and_update(
@@ -159,11 +182,11 @@ def resolve_proposal(
 
     try:
         system = claimed["failure"].get("system", "unknown")
-        original = next(
-            (m for m in claimed.get("matches", []) if m.get("kind") == "incident_fix"), None
-        )
-        if action == "correct" and original:
-            memory_id = memory.correct(original["_id"], rule, approved_by)
+        # A correction replaces a memory only when the draft was copied from it. A model draft or a
+        # weak match copied nothing, so the old memories stay and the human's rule is stored as new.
+        copied_from = claimed.get("proposal", {}).get("memory_id")
+        if action == "correct" and copied_from:
+            memory_id = memory.correct(copied_from, rule, approved_by)
         else:
             memory_id = memory.remember(Memory(
                 kind="approved_rule",

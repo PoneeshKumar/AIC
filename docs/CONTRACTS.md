@@ -54,7 +54,7 @@ Schema v1:
 ```
 Schema v2:
 ```json
-{"tracking": {"state": "DISRUPTED", "estimated_arrival_epoch": 1794688800}}
+{"tracking": {"state": "DISRUPTED", "estimated_arrival_epoch": 1794679200}}
 ```
 
 ### Warehouse (port 8102)
@@ -85,6 +85,8 @@ Schema v2:
   "log": [{"ts": "14:02:11", "message": "resume: last verified step = reserve_storage"}]
 }
 ```
+
+`duplicate_actions` and `reservations` are `null` when the warehouse or the carrier did not answer. The screen then shows `--` and never a false 0.
 
 ## Asking an assistant for MongoDB queries
 

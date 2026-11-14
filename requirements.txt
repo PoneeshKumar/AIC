@@ -5,6 +5,7 @@ pymongo
 httpx
 python-dotenv
 voyageai
+anthropic
 langsmith
 pytest
 mongomock

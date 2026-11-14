@@ -14,6 +14,10 @@ _voyage_client = None
 MIN_PROPOSAL_SCORE = 0.75
 
 
+class MemorySuperseded(ValueError):
+    """The memory to correct is gone or was already corrected. A ValueError so older callers still catch it."""
+
+
 def _client():
     global _voyage_client
     if _voyage_client is None:
@@ -75,7 +79,7 @@ def correct(memory_id: str, corrected_fix: dict, approved_by: str) -> str:
     collection = get_db()[config.MEMORIES]
     original = collection.find_one({"_id": ObjectId(memory_id), "superseded_by": None})
     if not original:
-        raise ValueError(f"memory not found or already superseded: {memory_id}")
+        raise MemorySuperseded(f"memory not found or already superseded: {memory_id}")
     replacement = Memory(
         kind="approved_rule",
         system=original["system"],

@@ -24,7 +24,8 @@ def get_db():
     if _client is None:
         if not config.MONGODB_URI:
             raise RuntimeError("MONGODB_URI is empty. Copy .env.example to .env and fill it in.")
-        _client = MongoClient(config.MONGODB_URI)
+        # The driver default waits 30 s for an unreachable cluster, which freezes the screen.
+        _client = MongoClient(config.MONGODB_URI, serverSelectionTimeoutMS=config.MONGODB_TIMEOUT_MS)
     return _client[config.MONGODB_DB]
 
 

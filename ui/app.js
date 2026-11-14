@@ -20,7 +20,7 @@ window.ColdTrace = (() => {
     skipped: { badge: '', text: () => 'No longer needed' },
   }
   const SHIP = { in_transit: ['info', 'In transit'], recovering: ['warn', 'Recovery in progress'], recovered: ['good', 'Rerouted'],
-    delivered: ['good', 'Delivered'], quarantined: ['crit', 'Quarantined'] }
+    delivered: ['good', 'Delivered'], quarantined: ['crit', 'Quarantined'], waiting_approval: ['warn', 'Waiting for approval'] }
 
   let lastOk = 0, everOk = false, seenLog = 0, editing = false, currentProposal = null
   let net = null, lastState = null, samples = window.__previewHistory || []
@@ -126,7 +126,7 @@ window.ColdTrace = (() => {
     list.replaceChildren()
     const rows = [
       ['carrier', s => s.ok ? (s.schema_version === 2 ? ['warn', 'Format changed', 'Answering in API v2'] : ['good', 'Operational', 'API v1']) : null],
-      ['warehouse', s => s.ok ? ['good', 'Operational', `${s.reservations ?? 0} reservation${s.reservations === 1 ? '' : 's'} held for this shipment`] : null],
+      ['warehouse', s => s.ok ? ['good', 'Operational', s.reservations == null ? 'Reservation count unknown' : `${s.reservations} reservation${s.reservations === 1 ? '' : 's'} held for this shipment`] : null],
       ['hospital', s => s.ok ? ['good', 'Operational', 'Receiving delivery updates'] : null],
       ['agent', s => s.alive ? ['good', 'Running', s.worker || 'worker'] : s.worker ? ['crit', 'Not responding', `${s.worker} missed its heartbeat`] : ['', 'Offline', 'No worker registered']],
     ]

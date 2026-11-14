@@ -63,7 +63,8 @@ def next_step(run_id: str, worker_id: str) -> Step | None:
         if collection.find_one({
             "run_id": run_id,
             "seq": {"$lt": candidate["seq"]},
-            "status": {"$nin": ["verified", "skipped"]},
+            # A failed step is settled. run.py re-plans after any failure, so it must not block its replacement.
+            "status": {"$nin": ["verified", "skipped", "failed"]},
         }):
             continue
         document = collection.find_one_and_update(
@@ -74,6 +75,7 @@ def next_step(run_id: str, worker_id: str) -> Step | None:
                     {"lease_expires": None},
                     {"lease_expires": {"$exists": False}},
                     {"lease_expires": {"$lte": now}},
+                    {"lease_owner": worker_id},  # a restarted worker takes back its own lease
                 ],
             },
             {
@@ -101,6 +103,20 @@ def mark_verified(step: Step, evidence: dict, verified_by: str) -> None:
 
 def mark_failed(step: Step, evidence: dict) -> None:
     _advance(step, "sent", "failed", evidence=evidence)
+
+
+def skip_planned(run_id: str) -> int:
+    """Mark every planned step skipped so the run can re-plan after a failure."""
+    result = get_db()[config.STEPS].update_many(
+        {"run_id": run_id, "status": "planned"},
+        {"$set": {
+            "status": "skipped",
+            "lease_owner": None,
+            "lease_expires": None,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    return result.modified_count
 
 
 def unresolved_sent_steps(run_id: str) -> list[Step]:

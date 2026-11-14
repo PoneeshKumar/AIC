@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -46,19 +47,39 @@ def _log(run_id: str, message: str, data: dict):
     get_db()[config.EVENTS].insert_one(Event(run_id=run_id, worker="chaos", kind="chaos", message=message, data=data).model_dump())
 
 
+HEARTBEAT_FRESH_S = 15  # a worker can sit in a 10 s request timeout between heartbeats
+
+
+def _is_fresh(beat) -> bool:
+    if not isinstance(beat, datetime):
+        return False
+    if beat.tzinfo is None:
+        beat = beat.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - beat < timedelta(seconds=HEARTBEAT_FRESH_S)
+
+
 def _kill_agent() -> dict:
     db = get_db()
-    w = db[config.WORKERS].find_one({"pid": {"$exists": True}, "alive": True}, sort=[("heartbeat", -1)])
-    if not w:
-        raise RuntimeError("no alive worker with a pid in `workers`")
-    try:
-        os.kill(int(w["pid"]), signal.SIGKILL)
-    except ProcessLookupError:
-        pass  # already dead, still restart it
-    time.sleep(2)
+    target = db[config.RUNS].find_one(sort=[("_id", -1)]) or db[config.SHIPMENTS].find_one() or {}
+    if not target.get("shipment_id"):
+        raise RuntimeError("no run or shipment to restart the agent for")
+    w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)]) or {}
+    killed = None
+    # Only a recent heartbeat proves the pid is still our agent. A stale pid may belong to another program.
+    if _is_fresh(w.get("heartbeat")):
+        try:
+            os.kill(int(w["pid"]), signal.SIGKILL)
+            killed = w["pid"]
+        except ProcessLookupError:
+            pass  # it finished on its own just now
+        time.sleep(2)
     # ponytail: restarts as a plain child, a supervisor would be sturdier but this is a demo
-    p = subprocess.Popen([sys.executable, "-m", "agent.run"], start_new_session=True)
-    return {"killed_pid": w["pid"], "restarted_pid": p.pid}
+    p = subprocess.Popen(
+        [sys.executable, "-m", "agent.run", "--shipment", target["shipment_id"],
+         "--worker-id", w.get("worker_id", "worker-1")],
+        start_new_session=True,
+    )
+    return {"killed_pid": killed, "restarted_pid": p.pid}
 
 
 def fire(event: str, run_id: str | None = None, **kw) -> dict:
@@ -76,7 +97,8 @@ def fire(event: str, run_id: str | None = None, **kw) -> dict:
         msg = f"chaos: next {system} response will be dropped"
     elif event == "kill_agent":
         out = _kill_agent()
-        msg = f"chaos: agent pid {out['killed_pid']} killed, restarted as {out['restarted_pid']}"
+        msg = (f"chaos: agent pid {out['killed_pid']} killed, restarted as {out['restarted_pid']}" if out["killed_pid"]
+               else f"chaos: no agent was running, started one as pid {out['restarted_pid']}")
     else:
         raise ValueError(f"unknown event {event!r}, choose from {EVENTS}")
     _log(run_id, msg, {"event": event, **out})

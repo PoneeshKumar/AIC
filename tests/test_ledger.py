@@ -37,3 +37,6 @@ def test_next_step_does_not_skip_a_leased_earlier_step(monkeypatch):
     claimed = ledger.next_step("run-1", "worker-a")
     assert claimed is not None and claimed.seq == 1
     assert ledger.next_step("run-1", "worker-b") is None
+    # A worker that crashed before sending comes back under the same id and takes its lease back.
+    again = ledger.next_step("run-1", "worker-a")
+    assert again is not None and again.seq == 1

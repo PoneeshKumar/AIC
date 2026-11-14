@@ -113,8 +113,27 @@ def _route_options(shipment: dict) -> list[planner.RouteOption]:
   return options
 
 
+def _world_state(shipment_id: str) -> dict:
+  """What the warehouse and the carrier already hold for this shipment.
+
+  A new run gets a new run_id, so its idempotency keys are new too. Reading the world first is what
+  stops a second start from reserving and booking again. A failed read raises, so we never plan blind.
+  """
+  query = {"shipment_id": shipment_id}
+  reservations = _response_items(
+    httpx.get(f"{config.WAREHOUSE_URL}/reservations", params=query, timeout=10), "reservations"
+  )
+  bookings = _response_items(
+    httpx.get(f"{config.CARRIER_URL}/bookings", params=query, timeout=10), "bookings"
+  )
+  return {
+    "reservation": reservations[-1] if reservations else None,
+    "booking": bookings[-1] if bookings else None,
+  }
+
+
 def _verified_state(db, run_id: str, shipment_id: str) -> dict:
-  state = {"run_id": run_id, "shipment_id": shipment_id}
+  state = {"run_id": run_id, "shipment_id": shipment_id, **_world_state(shipment_id)}
   for step in db[config.STEPS].find({"run_id": run_id, "status": "verified"}).sort("seq", 1):
     evidence = step.get("evidence") or {}
     if step.get("action") == "reserve_storage":
@@ -170,9 +189,15 @@ def _resume_sent(db, run_id: str, worker_id: str) -> None:
 @tracing.traced("plan_if_needed")
 def _plan_if_needed(db, run: dict, shipment: dict, worker_id: str) -> None:
   run_id = run["run_id"]
-  existing = list(db[config.STEPS].find({"run_id": run_id}))
-  if any(step["status"] in {"planned", "sent"} for step in existing):
+  statuses = {step["status"] for step in db[config.STEPS].find({"run_id": run_id})}
+  if "sent" in statuses:
     return
+  if "planned" in statuses:
+    if "failed" not in statuses:
+      return
+    # A step failed, so the rest of the old plan no longer holds. Drop it and plan again from verified state.
+    skipped = ledger.skip_planned(run_id)
+    _event(db, run_id, worker_id, "plan", f"a step failed, skipped {skipped} planned steps to re-plan")
   plan = planner.solve(
     shipment["excursion_budget_minutes"],
     _route_options(shipment),
@@ -227,7 +252,7 @@ def parse_carrier_status(db, run_id: str, worker_id: str, shipment_id: str) -> d
   for rule in memory.find_approved_rules("carrier"):
     try:
       translated = adapt.apply_rule(rule["fix"], raw)
-    except (KeyError, ValueError, TypeError, OSError, OverflowError):
+    except (KeyError, ValueError, TypeError, AttributeError, OSError, OverflowError):
       continue
     _event(db, run_id, worker_id, "memory_hit", "applied stored carrier rule, no approval needed", {
       "memory_id": rule["_id"], "translated": translated,
@@ -277,6 +302,12 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
   try:
     carrier_status = parse_carrier_status(db, run_id, worker_id, shipment_id)
   except httpx.HTTPError as exc:
+    if run_document.get("blocked_reason") == "waiting_approval":
+      # An unreadable carrier is not an approval. Stay blocked until the status parses.
+      _event(db, run_id, worker_id, "finish", "carrier status read failed, still waiting for approval", {
+        "error": str(exc),
+      })
+      return run_id
     _event(db, run_id, worker_id, "send", "carrier status read failed, continuing", {"error": str(exc)})
     carrier_status = {}
   if carrier_status is None:
@@ -299,11 +330,17 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
     try:
       _send(step)
     except Exception as exc:
-      _event(db, run_id, worker_id, "send", f"request outcome unknown for {step.action}", {
+      _event(db, run_id, worker_id, "send", f"request outcome unknown for {step.action}, reading back", {
+        "error": str(exc), "seq": step.seq,
+      })
+    try:
+      took_effect, evidence = verify.verify(step)
+    except (httpx.HTTPError, ValueError) as exc:
+      # The step stays `sent`, so the next start resolves it by reading.
+      _event(db, run_id, worker_id, "verify", f"could not read back {step.action}", {
         "error": str(exc), "seq": step.seq,
       })
       break
-    took_effect, evidence = verify.verify(step)
     if took_effect:
       ledger.mark_verified(step, evidence, f"GET read-back for {step.action}")
       _event(db, run_id, worker_id, "verify", f"verified {step.action}", evidence)
@@ -313,7 +350,7 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
       break
 
   remaining = db[config.STEPS].count_documents({
-    "run_id": run_id, "status": {"$in": ["planned", "sent"]},
+    "run_id": run_id, "status": {"$nin": ["verified", "skipped"]},
   })
   total = db[config.STEPS].count_documents({"run_id": run_id})
   current_run = db[config.RUNS].find_one({"run_id": run_id}) or {}

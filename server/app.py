@@ -8,6 +8,7 @@ POST /approve     approve or correct a proposed fix
 Every source is optional. If Atlas or a mock is down, /state still answers and says so,
 so the screen never goes blank in front of a judge.
 """
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pymongo.errors import PyMongoError
 
 from agent import adapt
+from agent import memory
 from agent import tracing
 from core import config
 from core.db import get_db
@@ -50,15 +52,21 @@ def _read(system: str, path: str, **params):
         return False, None
 
 
+ATLAS_RETRY_S = 5
+_atlas_retry_at = 0.0  # after a failed ping, skip Atlas until this monotonic time so /state stays fast
+
+
 def _db():
     """Atlas handle, or None when there is no connection string or the cluster is unreachable."""
-    if not config.MONGODB_URI:
+    global _atlas_retry_at
+    if not config.MONGODB_URI or time.monotonic() < _atlas_retry_at:
         return None
     try:
         db = get_db()
         db.command("ping")
         return db
     except Exception:
+        _atlas_retry_at = time.monotonic() + ATLAS_RETRY_S
         return None
 
 
@@ -81,16 +89,20 @@ def _world(shipment_id: str) -> dict:
     _, bookings = _read("carrier", "/bookings", shipment_id=shipment_id)
     _, reservations = _read("warehouse", "/reservations", shipment_id=shipment_id)
     _, delivery = _read("hospital", f"/deliveries/{shipment_id}")
-    return {"up": up, "tracking": tracking, "bookings": bookings or [],
-            "reservations": reservations or [], "delivery": delivery}
+    # bookings and reservations stay None when the read failed, so "unknown" is never shown as 0
+    return {"up": up, "tracking": tracking, "bookings": bookings,
+            "reservations": reservations, "delivery": delivery}
 
 
-def _duplicates(world: dict) -> int:
+def _duplicates(world: dict) -> int | None:
     """Same rule as chaos.invariants.duplicate_actions, applied to the reads /state already made.
 
     One intended action is a distinct (warehouse, window) for storage or a distinct route for a booking.
     Counting here keeps /state to one round of reads, and it never depends on Atlas or on fixed mock ports.
+    Returns None when either list could not be read, because a count of what we cannot see would be a guess.
     """
+    if world["reservations"] is None or world["bookings"] is None:
+        return None
     holds = Counter((r.get("warehouse_id"), r.get("from"), r.get("to")) for r in world["reservations"])
     books = Counter(b.get("route_id") for b in world["bookings"])
     return sum(n - 1 for n in (*holds.values(), *books.values()))
@@ -128,7 +140,11 @@ def state():
     shipment_id = seeded["shipment_id"]
     world = _world(shipment_id)
     db = _db()
-    atlas = _atlas(db, shipment_id) if db is not None else None
+    try:
+        atlas = _atlas(db, shipment_id) if db is not None else None
+    except PyMongoError:  # Atlas answered the ping and then failed, so show the mocks only
+        atlas = None
+    run = (atlas or {}).get("run") or {}
     log = []
 
     if atlas is None:
@@ -138,6 +154,7 @@ def state():
         log.append({"ts": _clock(datetime.now(timezone.utc)), "message": "Atlas is not connected. Showing the mock systems only."})
     else:
         ship, steps, worker, proposal = atlas["ship"], atlas["steps"], atlas["worker"], atlas["proposal"]
+        ship = {**ship, **_run_view(run)}
         log += [{"ts": _clock(e.get("ts")), "message": e.get("message", "")} for e in atlas["events"]]
 
     tracking = world["tracking"] or {}
@@ -155,14 +172,29 @@ def state():
         "steps": [{k: s.get(k) for k in ("seq", "action", "system", "status", "reason")} for s in steps],
         "systems": {
             "carrier": {"ok": world["up"]["carrier"], "schema_version": 2 if "tracking" in tracking else 1},
-            "warehouse": {"ok": world["up"]["warehouse"], "reservations": len(world["reservations"])},
+            "warehouse": {"ok": world["up"]["warehouse"], "reservations": None if world["reservations"] is None else len(world["reservations"])},
             "hospital": {"ok": world["up"]["hospital"]},
             "agent": {"worker": (worker or {}).get("worker_id"), "alive": _alive(worker)},
         },
         "proposal": _proposal_view(proposal),
         "log": log,
-        "trace_url": tracing.trace_url((atlas or {}).get("run", {}).get("trace_id")) if atlas else None,
+        "trace_url": tracing.trace_url(run.get("trace_id")) if atlas else None,
     }
+
+
+def _run_view(run: dict) -> dict:
+    """Shipment status and budget as the agent recorded them on the run. Only the seed writes the shipment document."""
+    view = {}
+    status = run.get("status")
+    if status == "complete":
+        view["status"] = "recovered"
+    elif status == "blocked":
+        view["status"] = run.get("blocked_reason") or "quarantined"  # no feasible route means it stays quarantined
+    elif status:
+        view["status"] = status
+    if run.get("budget_after_minutes") is not None:
+        view["budget_remaining_min"] = run["budget_after_minutes"]
+    return view
 
 
 # Airport coordinates for the map. Public reference positions, rounded.
@@ -224,8 +256,11 @@ def network():
 def _proposal_view(p):
     if not p:
         return None
-    return {"proposal_id": str(p["_id"]), "system": p.get("system"), "summary": p.get("summary", ""),
-            "fix": p.get("fix", {}), "memory_hit": p.get("memory_hit"), "score": p.get("score")}
+    # Shape written by agent.adapt.propose_fix: the draft is under "proposal", the recalled memories under "matches".
+    draft, top = p.get("proposal") or {}, (p.get("matches") or [{}])[0]
+    return {"proposal_id": p.get("proposal_id"), "system": (p.get("failure") or {}).get("system"),
+            "summary": draft.get("summary", ""), "fix": draft.get("fix", {}),
+            "memory_hit": top.get("summary"), "score": top.get("score")}
 
 
 _local_chaos = []  # (time, message) for fallback chaos, shown in the log only while Atlas is not connected
@@ -243,13 +278,13 @@ def _fallback_call(event: str) -> dict:
         route_id = _seed_shipment()["original_route_id"]
         route = next(r for r in seed("routes.json")["routes"] if r["route_id"] == route_id)
         flight = next(l["flight"] for l in route["legs"] if "flight" in l)
-        call("carrier", "POST", "/admin/cancel_flight", json={"flight": flight})
+        call("carrier", "POST", "/admin/cancel_flight", json={"flight": flight}).raise_for_status()
         return {"event": event, "message": f"Flight {flight} cancelled"}
     if event == "change_carrier":
-        call("carrier", "POST", "/admin/schema", json={"version": 2})
+        call("carrier", "POST", "/admin/schema", json={"version": 2}).raise_for_status()
         return {"event": event, "message": "Carrier switched to its new API format"}
     if event == "drop_response":
-        call("warehouse", "POST", "/admin/faults", json={"drop_next_responses": 1})
+        call("warehouse", "POST", "/admin/faults", json={"drop_next_responses": 1}).raise_for_status()
         return {"event": event, "message": "The warehouse will drop its next response"}
     raise HTTPException(501, f"{event} needs the chaos injector, which is not built yet")
 
@@ -261,16 +296,28 @@ def chaos(event: str):
     if _db() is None:  # the real injector logs to Atlas, so without it use the mock admin calls directly
         try:
             return _fallback_fire(event)
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(502, f"A mock system refused the chaos call with {e.response.status_code}")
         except httpx.HTTPError:
             raise HTTPException(503, "Could not reach the mock systems. Are they running?")
     from chaos.injector import fire, random_run
     try:
         if event == "random":
             first = random_run(seed=int(datetime.now().timestamp()), count=1)[0]
-            return {"event": event, "message": first.get("message") or "Random chaos failed: " + first.get("error", "unknown")}
+            if "message" not in first:
+                raise HTTPException(502, "Random chaos failed: " + first.get("error", "unknown"))
+            return {"event": event, "message": first["message"]}
         return fire(event)
-    except Exception as e:  # the injector can fail on a missing worker or an unreachable mock
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as e:  # a mock answered and said no
+        raise HTTPException(502, f"{event} failed: {e}")
+    except (httpx.HTTPError, PyMongoError) as e:  # a mock or Atlas is unreachable
         raise HTTPException(503, f"{event} failed: {e}")
+    except RuntimeError as e:  # nothing to act on, for example no live worker to kill
+        raise HTTPException(409, f"{event} failed: {e}")
+    except Exception as e:
+        raise HTTPException(500, f"{event} failed: {e}")
 
 
 @app.post("/approve")
@@ -301,7 +348,9 @@ def approve(body: dict):
         raise HTTPException(404, f"proposal not found: {proposal_id}") from exc
     except adapt.ProposalResolved as exc:
         raise HTTPException(409, f"proposal already resolved: {proposal_id}") from exc
+    except memory.MemorySuperseded as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    except (RuntimeError, PyMongoError) as exc:
+    except Exception as exc:  # Atlas, a missing key or the Voyage SDK, whose errors share no base class with the others
         raise HTTPException(502, f"could not store the rule: {exc}") from exc

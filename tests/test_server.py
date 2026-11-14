@@ -43,6 +43,20 @@ def test_state_reports_a_down_mock(ui, monkeypatch):
     assert ui.get("/state").json()["systems"]["hospital"]["ok"] is False
 
 
+def test_unreadable_warehouse_gives_unknown_counts_not_zero(ui, monkeypatch):
+    import httpx
+
+    def down(system, method, path, **kw):
+        if system == "warehouse":
+            raise httpx.ConnectError("refused")
+        return MOCKS[system].request(method, path, **kw)
+
+    monkeypatch.setattr(server, "call", down)
+    st = ui.get("/state").json()
+    assert st["counters"]["duplicate_actions"] is None
+    assert st["systems"]["warehouse"] == {"ok": False, "reservations": None}
+
+
 def test_carrier_schema_and_reservations_come_from_the_mocks(ui):
     assert ui.post("/chaos/change_carrier").status_code == 200
     MOCKS["warehouse"].post("/reservations", json=RES, headers={"Idempotency-Key": "k1"})

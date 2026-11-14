@@ -64,7 +64,7 @@ def solve(budget_minutes: int, routes: list[RouteOption], verified_state: dict) 
                 "action": "set_quarantine",
                 "target": shipment_id,
                 "idempotency_key": f"{run_id}:set_quarantine:{shipment_id}",
-                "reason": "No feasible recovery route; keep the shipment quarantined",
+                "reason": "No feasible recovery route, so keep the shipment quarantined",
                 "request": {"shipment_id": shipment_id, "status": "quarantined"},
             }],
         )
