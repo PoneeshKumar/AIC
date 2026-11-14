@@ -8,6 +8,7 @@ POST /approve     approve or correct a proposed fix
 Every source is optional. If Atlas or a mock is down, /state still answers and says so,
 so the screen never goes blank in front of a judge.
 """
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -81,18 +82,15 @@ def _world(shipment_id: str) -> dict:
             "reservations": reservations or [], "delivery": delivery}
 
 
-def _duplicates(shipment_id: str, world: dict) -> int:
-    """Prefer the CHAOS invariant. Until it lands, count extra holds per warehouse and extra bookings."""
-    try:
-        from chaos.invariants import duplicate_actions
-        return duplicate_actions(shipment_id)
-    except NotImplementedError:
-        per_wh = {}
-        for r in world["reservations"]:
-            per_wh[r.get("warehouse_id")] = per_wh.get(r.get("warehouse_id"), 0) + 1
-        extra_holds = sum(n - 1 for n in per_wh.values() if n > 1)
-        extra_bookings = max(0, len(world["bookings"]) - 1)
-        return extra_holds + extra_bookings
+def _duplicates(world: dict) -> int:
+    """Same rule as chaos.invariants.duplicate_actions, applied to the reads /state already made.
+
+    One intended action is a distinct (warehouse, window) for storage or a distinct route for a booking.
+    Counting here keeps /state to one round of reads, and it never depends on Atlas or on fixed mock ports.
+    """
+    holds = Counter((r.get("warehouse_id"), r.get("from"), r.get("to")) for r in world["reservations"])
+    books = Counter(b.get("route_id") for b in world["bookings"])
+    return sum(n - 1 for n in (*holds.values(), *books.values()))
 
 
 def _atlas(db, shipment_id: str) -> dict:
@@ -147,7 +145,7 @@ def state():
             "budget_remaining_min": ship.get("budget_remaining_min", seeded["excursion_budget_minutes"]),
         },
         "counters": {
-            "duplicate_actions": _duplicates(shipment_id, world),
+            "duplicate_actions": _duplicates(world),
             "steps_verified": sum(1 for s in steps if s.get("status") == "verified"),
             "steps_total": len(steps),
         },
@@ -256,15 +254,19 @@ def _fallback_call(event: str) -> dict:
 def chaos(event: str):
     if event not in CHAOS_EVENTS:
         raise HTTPException(404, f"unknown chaos event {event}")
-    try:
-        from chaos.injector import fire, random_run
-        result = random_run(seed=int(datetime.now().timestamp()), count=1) if event == "random" else fire(event)
-        return {"event": event, "result": result}
-    except NotImplementedError:
+    if _db() is None:  # the real injector logs to Atlas, so without it use the mock admin calls directly
         try:
             return _fallback_fire(event)
         except httpx.HTTPError:
             raise HTTPException(503, "Could not reach the mock systems. Are they running?")
+    from chaos.injector import fire, random_run
+    try:
+        if event == "random":
+            first = random_run(seed=int(datetime.now().timestamp()), count=1)[0]
+            return {"event": event, "message": first.get("message") or "Random chaos failed: " + first.get("error", "unknown")}
+        return fire(event)
+    except Exception as e:  # the injector can fail on a missing worker or an unreachable mock
+        raise HTTPException(503, f"{event} failed: {e}")
 
 
 @app.post("/approve")
