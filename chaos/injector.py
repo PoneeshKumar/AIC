@@ -73,21 +73,34 @@ def _kill_agent() -> dict:
         except ProcessLookupError:
             pass  # it finished on its own just now
         time.sleep(2)
+    return {"killed_pid": killed, "restarted_pid": _start_agent(target["shipment_id"], w.get("worker_id", "worker-1"))}
+
+
+def _start_agent(shipment_id: str, worker_id: str = "worker-1") -> int:
     # ponytail: restarts as a plain child, a supervisor would be sturdier but this is a demo
     p = subprocess.Popen(
-        [sys.executable, "-m", "agent.run", "--shipment", target["shipment_id"],
-         "--worker-id", w.get("worker_id", "worker-1")],
+        [sys.executable, "-m", "agent.run", "--shipment", shipment_id, "--worker-id", worker_id],
         start_new_session=True,
     )
-    return {"killed_pid": killed, "restarted_pid": p.pid}
+    return p.pid
+
+
+def _wake_agent() -> int | None:
+    """A cancelled flight is the trigger for recovery, so start the agent unless one is already working."""
+    db = get_db()
+    w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)]) or {}
+    if _is_fresh(w.get("heartbeat")):
+        return None  # the live worker re-reads routes on its next plan
+    ship = db[config.SHIPMENTS].find_one() or {}
+    return _start_agent(ship["shipment_id"], w.get("worker_id", "worker-1")) if ship.get("shipment_id") else None
 
 
 def fire(event: str, run_id: str | None = None, **kw) -> dict:
     run_id = run_id or _latest_run_id()
     if event == "cancel_flight":
         flight = kw.get("flight", "CT118")
-        out = _post(config.CARRIER_URL + "/admin/cancel_flight", {"flight": flight})
-        msg = f"chaos: flight {flight} cancelled"
+        out = {**_post(config.CARRIER_URL + "/admin/cancel_flight", {"flight": flight}), "agent_pid": _wake_agent()}
+        msg = f"chaos: flight {flight} cancelled" + (f", agent started as pid {out['agent_pid']}" if out["agent_pid"] else "")
     elif event == "change_carrier":
         out = _post(config.CARRIER_URL + "/admin/schema", {"version": kw.get("version", 2)})
         msg = f"chaos: carrier API switched to schema v{kw.get('version', 2)}"

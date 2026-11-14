@@ -31,7 +31,8 @@ window.MapView = (() => {
   function style(status, kind, hl) {
     const truck = kind === 'truck'
     if (status === 'booked') return { color: css('--series-1'), weight: hl ? 6 : 4, opacity: 1, dashArray: truck ? '1 8' : null }
-    if (status === 'cancelled') return { color: css('--crit'), weight: hl ? 4 : 2, opacity: 0.85, dashArray: '6 6' }
+    // the old path stays on the map so the reroute reads as a change
+    if (status === 'cancelled') return { color: css('--crit-dull'), weight: hl ? 4 : 3, opacity: hl ? 0.9 : 0.6, dashArray: '6 6' }
     return { color: hl ? css('--ink-2') : '#8a94a3', weight: hl ? 4 : 2, opacity: 0.9, dashArray: truck ? '1 6' : null }
   }
 
@@ -53,7 +54,8 @@ window.MapView = (() => {
     if (key !== lastKey) {
       lastKey = key
       layer.clearLayers(); lines = {}
-      const order = [...net.routes].sort((a, b) => (a.status === 'booked') - (b.status === 'booked'))
+      const rank = s => s === 'cancelled' ? 0 : s === 'booked' ? 2 : 1  // old path underneath, new booking on top
+      const order = [...net.routes].sort((a, b) => rank(a.status) - rank(b.status))
       for (const r of order) {
         lines[r.route_id] = path(net, r).map(({ leg, pts }) => {
           const pl = L.polyline(pts, { ...style(r.status, leg.kind), lineCap: 'round' }).addTo(layer)
