@@ -38,3 +38,17 @@ def test_propose_fix_reports_model_failure(monkeypatch):
     out = adapt.propose_fix({"system": "carrier"})["proposal"]
     assert out["source"] == "recalled_fix" and "no live LLM" in out["llm_error"]
     assert out["fix"] == {"map": {"eta": "x.y"}} and "unavailable" in out["summary"]
+
+
+def test_vector_index_setup_creates_missing_collection(monkeypatch):
+    import mongomock
+
+    from core import config
+    from core.db import ensure_memory_vector_index
+
+    monkeypatch.setattr(mongomock.Collection, "list_search_indexes", lambda self: [], raising=False)  # mock has no Atlas search
+    monkeypatch.setattr(mongomock.Collection, "create_search_index", lambda self, model: None, raising=False)
+    db = mongomock.MongoClient()["fresh"]
+    assert config.MEMORIES not in db.list_collection_names()
+    ensure_memory_vector_index(db)
+    assert config.MEMORIES in db.list_collection_names()

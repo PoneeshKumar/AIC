@@ -48,6 +48,8 @@ def ensure_memory_vector_index(db=None):
     """Create the Atlas Vector Search index used by memory recall when supported."""
     if db is None:
         db = get_db()
+    if config.MEMORIES not in db.list_collection_names():
+        db.create_collection(config.MEMORIES)  # Atlas cannot index a collection that does not exist yet
     collection = db[config.MEMORIES]
     if not hasattr(collection, "list_search_indexes"):
         return
