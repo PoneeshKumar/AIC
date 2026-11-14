@@ -366,12 +366,23 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
   return run_id
 
 
+def _sign_off(worker_id: str) -> None:
+  """Tell the injector this worker has exited, so it can start a new one without waiting for the heartbeat to age."""
+  try:
+    get_db()[config.WORKERS].update_one({"worker_id": worker_id}, {"$set": {"alive": False}})
+  except Exception:
+    pass  # Atlas is unreachable, so the stale heartbeat will mark it dead instead
+
+
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--shipment", required=True)
   parser.add_argument("--worker-id", default="worker-1")
   args = parser.parse_args()
-  run_id = run(args.shipment, args.worker_id)
+  try:
+    run_id = run(args.shipment, args.worker_id)
+  finally:
+    _sign_off(args.worker_id)
   if tracing.enabled():
     from chaos.invariants import check_all
     db = get_db()

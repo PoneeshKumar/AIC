@@ -71,7 +71,7 @@ def test_kill_agent(monkeypatch):
     from datetime import datetime, timedelta, timezone
     victim, bystander = subprocess.Popen(["sleep", "60"]), subprocess.Popen(["sleep", "60"])  # before Popen is faked
     now = datetime.now(timezone.utc)
-    worker = {"pid": victim.pid, "worker_id": "w7", "heartbeat": now}
+    worker = {"pid": victim.pid, "worker_id": "w7", "heartbeat": now, "alive": True}
     monkeypatch.setattr(injector, "get_db", lambda: FakeDB(
         workers=FakeColl([worker]), runs=FakeColl([{"run_id": "r", "shipment_id": "BIO-2048"}])))
     monkeypatch.setattr(injector.time, "sleep", lambda s: None)

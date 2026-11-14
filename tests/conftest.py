@@ -7,3 +7,13 @@ def no_live_llm(monkeypatch):
     from agent import adapt
 
     monkeypatch.setattr(adapt, "_ask_llm", lambda prompt: (_ for _ in ()).throw(RuntimeError("no live LLM in tests")))
+
+
+@pytest.fixture(autouse=True)
+def no_real_agent(monkeypatch):
+    """Approving a proposal starts the agent. Tests must never spawn one or read the real cluster."""
+    from chaos import injector
+
+    started = []
+    monkeypatch.setattr(injector, "wake_agent", lambda: started.append(1))
+    return started

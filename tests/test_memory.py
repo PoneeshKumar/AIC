@@ -52,3 +52,18 @@ def test_vector_index_setup_creates_missing_collection(monkeypatch):
     assert config.MEMORIES not in db.list_collection_names()
     ensure_memory_vector_index(db)
     assert config.MEMORIES in db.list_collection_names()
+
+
+def test_reset_clears_runs_and_approved_rules_but_keeps_incidents():
+    import mongomock
+
+    from core import config
+    from scripts.reset import reset
+
+    db = mongomock.MongoClient()["reset"]
+    db[config.RUNS].insert_one({"run_id": "r"})
+    db[config.MEMORIES].insert_many([
+        {"kind": "approved_rule", "active": True},
+        {"kind": "incident_fix", "active": False, "superseded_by": "x"}])
+    assert reset(db)["approved_rules"] == 1 and db[config.RUNS].count_documents({}) == 0
+    assert list(db[config.MEMORIES].find({}, {"_id": 0})) == [{"kind": "incident_fix", "active": True, "superseded_by": None}]

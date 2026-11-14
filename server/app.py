@@ -320,6 +320,15 @@ def chaos(event: str):
         raise HTTPException(500, f"{event} failed: {e}")
 
 
+def _wake_agent() -> None:
+    """The run was blocked on this approval, so start the agent to finish it. The rule is stored either way."""
+    try:
+        from chaos.injector import wake_agent
+        wake_agent()
+    except Exception:
+        pass
+
+
 @app.post("/approve")
 def approve(body: dict):
     """Body: {proposal_id, action|decision, rule|fix, approved_by|by}."""
@@ -341,9 +350,11 @@ def approve(body: dict):
 
     rule = body.get("rule") or body.get("fix")
     try:
-        return adapt.resolve_proposal(
+        resolved = adapt.resolve_proposal(
             db, proposal_id, action, rule, body.get("approved_by") or body.get("by") or "human"
         )
+        _wake_agent()
+        return resolved
     except adapt.ProposalNotFound as exc:
         raise HTTPException(404, f"proposal not found: {proposal_id}") from exc
     except adapt.ProposalResolved as exc:

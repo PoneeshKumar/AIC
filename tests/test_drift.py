@@ -56,13 +56,14 @@ def test_duplicate_failure_from_second_run_makes_no_second_proposal(db, monkeypa
     assert db[config.PROPOSALS].count_documents({"status": "pending"}) == 1
 
 
-def test_approval_stores_rule_and_second_run_reuses_it(db, monkeypatch):
+def test_approval_stores_rule_and_second_run_reuses_it(db, monkeypatch, no_real_agent):
     carrier_returns(monkeypatch, V2)
     assert parse(db) is None
     proposal = db[config.PROPOSALS].find_one()
     client = TestClient(server.app)
     response = client.post("/approve", json={"proposal_id": proposal["proposal_id"], "action": "approve"})
     assert response.status_code == 200 and response.json()["status"] == "approved"
+    assert no_real_agent == [1], "approval must start the agent so the blocked run continues"
     assert db[config.MEMORIES].count_documents({"kind": "approved_rule"}) == 1
 
     result = parse(db, "run-2")

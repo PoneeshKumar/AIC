@@ -58,6 +58,11 @@ def _is_fresh(beat) -> bool:
     return datetime.now(timezone.utc) - beat < timedelta(seconds=HEARTBEAT_FRESH_S)
 
 
+def _is_live(worker: dict) -> bool:
+    """The agent clears `alive` when it exits, and a killed one stops sending heartbeats."""
+    return bool(worker.get("alive")) and _is_fresh(worker.get("heartbeat"))
+
+
 def _kill_agent() -> dict:
     db = get_db()
     target = db[config.RUNS].find_one(sort=[("_id", -1)]) or db[config.SHIPMENTS].find_one() or {}
@@ -66,7 +71,7 @@ def _kill_agent() -> dict:
     w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)]) or {}
     killed = None
     # Only a recent heartbeat proves the pid is still our agent. A stale pid may belong to another program.
-    if _is_fresh(w.get("heartbeat")):
+    if _is_live(w):
         try:
             os.kill(int(w["pid"]), signal.SIGKILL)
             killed = w["pid"]
@@ -85,11 +90,11 @@ def _start_agent(shipment_id: str, worker_id: str = "worker-1") -> int:
     return p.pid
 
 
-def _wake_agent() -> int | None:
-    """A cancelled flight is the trigger for recovery, so start the agent unless one is already working."""
+def wake_agent() -> int | None:
+    """Start the agent unless one is already working. Called when something changed that it must react to."""
     db = get_db()
     w = db[config.WORKERS].find_one({"pid": {"$exists": True}}, sort=[("heartbeat", -1)]) or {}
-    if _is_fresh(w.get("heartbeat")):
+    if _is_live(w):
         return None  # the live worker re-reads routes on its next plan
     ship = db[config.SHIPMENTS].find_one() or {}
     return _start_agent(ship["shipment_id"], w.get("worker_id", "worker-1")) if ship.get("shipment_id") else None
@@ -99,10 +104,11 @@ def fire(event: str, run_id: str | None = None, **kw) -> dict:
     run_id = run_id or _latest_run_id()
     if event == "cancel_flight":
         flight = kw.get("flight", "CT118")
-        out = {**_post(config.CARRIER_URL + "/admin/cancel_flight", {"flight": flight}), "agent_pid": _wake_agent()}
+        out = {**_post(config.CARRIER_URL + "/admin/cancel_flight", {"flight": flight}), "agent_pid": wake_agent()}
         msg = f"chaos: flight {flight} cancelled" + (f", agent started as pid {out['agent_pid']}" if out["agent_pid"] else "")
     elif event == "change_carrier":
-        out = _post(config.CARRIER_URL + "/admin/schema", {"version": kw.get("version", 2)})
+        # The agent only sees the new format when it runs, so start it like a cancelled flight does.
+        out = {**_post(config.CARRIER_URL + "/admin/schema", {"version": kw.get("version", 2)}), "agent_pid": wake_agent()}
         msg = f"chaos: carrier API switched to schema v{kw.get('version', 2)}"
     elif event == "drop_response":
         system = kw.get("system", "warehouse")
