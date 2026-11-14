@@ -237,4 +237,7 @@ h2 { font-size: 14px }
   .map { height: 280px }
   .steps li.step { grid-template-columns: 28px minmax(0, 1fr) } .step .badge { grid-column: 2; justify-self: start }
   .toast { left: 16px; right: 16px }
+  .log td.ts { width: 56px } .log td.kind { width: 64px }
+  .log td { padding-inline: 6px }
+  .routes-chart svg, .burn-chart svg { touch-action: pan-y }
 }
