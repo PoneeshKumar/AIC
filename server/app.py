@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pymongo.errors import PyMongoError
 
 from agent import adapt
+from agent import tracing
 from core import config
 from core.db import get_db
 from mocks.common import seed
@@ -104,7 +105,7 @@ def _atlas(db, shipment_id: str) -> dict:
     events = list(db[config.EVENTS].find({"run_id": run_id}).sort("ts", -1).limit(40)) if run_id else []
     worker = db[config.WORKERS].find_one({}, sort=[("heartbeat", -1)])
     proposal = db["proposals"].find_one({"status": "pending"}, sort=[("_id", -1)])
-    return {"ship": ship, "steps": steps, "events": list(reversed(events)), "worker": worker, "proposal": proposal}
+    return {"ship": ship, "run": run, "steps": steps, "events": list(reversed(events)), "worker": worker, "proposal": proposal}
 
 
 def _alive(worker) -> bool:
@@ -160,6 +161,7 @@ def state():
         },
         "proposal": _proposal_view(proposal),
         "log": log,
+        "trace_url": tracing.trace_url((atlas or {}).get("run", {}).get("trace_id")) if atlas else None,
     }
 
 
