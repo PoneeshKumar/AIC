@@ -49,6 +49,7 @@ class Memory(BaseModel):
     source_run_id: Optional[str] = None
     approved_by: Optional[str] = None
     superseded_by: Optional[str] = None  # set when a human corrects this memory
+    active: bool = True
     embedding: list[float] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=now)
 

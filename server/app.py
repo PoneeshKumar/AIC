@@ -16,8 +16,11 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pymongo.errors import PyMongoError
 
+from agent import adapt
 from core import config
+from core.db import get_db
 from mocks.common import seed
 
 app = FastAPI(title="ColdTrace")
@@ -51,7 +54,6 @@ def _db():
     if not config.MONGODB_URI:
         return None
     try:
-        from core.db import get_db
         db = get_db()
         db.command("ping")
         return db
@@ -271,24 +273,33 @@ def chaos(event: str):
 
 @app.post("/approve")
 def approve(body: dict):
-    """Body: {proposal_id, decision: "approved" | "corrected", fix (only when corrected), by}."""
-    from bson import ObjectId
-    from bson.errors import InvalidId
+    """Body: {proposal_id, action|decision, rule|fix, approved_by|by}."""
+    proposal_id = body.get("proposal_id")
+    if not proposal_id:
+        raise HTTPException(400, "proposal_id and action (approve or correct) are required")
 
-    decision = body.get("decision", "approved")
-    if decision not in ("approved", "corrected"):
-        raise HTTPException(422, "decision must be approved or corrected")
     db = _db()
     if db is None:
         raise HTTPException(503, "Atlas is not connected, so there is nothing to approve")
+
+    action = body.get("action") or body.get("decision")
+    if action in {"approved", "approve"}:
+        action = "approve"
+    elif action in {"corrected", "correct"}:
+        action = "correct"
+    else:
+        raise HTTPException(400, "proposal_id and action (approve or correct) are required")
+
+    rule = body.get("rule") or body.get("fix")
     try:
-        pid = ObjectId(body.get("proposal_id"))
-    except (InvalidId, TypeError):
-        raise HTTPException(422, "proposal_id is not valid")
-    update = {"status": decision, "approved_by": body.get("by", "human"), "decided_at": datetime.now(timezone.utc)}
-    if decision == "corrected":
-        update["fix"] = body.get("fix") or {}
-    res = db["proposals"].update_one({"_id": pid, "status": "pending"}, {"$set": update})
-    if res.matched_count == 0:
-        raise HTTPException(409, "no pending proposal with that id")
-    return {"proposal_id": str(pid), "status": decision}
+        return adapt.resolve_proposal(
+            db, proposal_id, action, rule, body.get("approved_by") or body.get("by") or "human"
+        )
+    except adapt.ProposalNotFound as exc:
+        raise HTTPException(404, f"proposal not found: {proposal_id}") from exc
+    except adapt.ProposalResolved as exc:
+        raise HTTPException(409, f"proposal already resolved: {proposal_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (RuntimeError, PyMongoError) as exc:
+        raise HTTPException(502, f"could not store the rule: {exc}") from exc

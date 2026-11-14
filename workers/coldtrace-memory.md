@@ -16,7 +16,7 @@ You build the failure memory and the drift handling: when a system changes shape
 2. Seed 15 to 20 synthetic incidents into `memories` with embeddings. Vary the wording.
 3. Create the Atlas Vector Search index on `memories.embedding` with filter fields `system` and `kind` (use the MongoDB MCP server or the Atlas UI).
 4. `recall()` with `$vectorSearch`, filtered by system, excluding superseded memories, returning scores.
-5. `propose_fix()`: failure summary plus recalled fixes go to the LLM, and the result is written to `proposals` and waits.
+5. `propose_fix()`: the highest-scoring recalled fix becomes a human-review proposal, and the result is written to `proposals` and waits.
 6. `apply_rule()`: deterministic translation using an approved rule. No LLM call on this path.
 7. `correct()`: a human edits a proposal, the old memory is marked superseded, the correction is stored.
 
@@ -27,7 +27,7 @@ You build the failure memory and the drift handling: when a system changes shape
 
 ## Do not
 
-- Let the LLM apply fixes directly. It proposes, a human approves, code applies.
+- Do not apply a recalled fix automatically. A human approves it, then ordinary code applies it.
 
 ## Every reply ends with
 

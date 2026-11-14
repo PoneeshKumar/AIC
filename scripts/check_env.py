@@ -27,8 +27,6 @@ if uri and "YOUR-SANDBOX" not in uri:
 
 report("VOYAGE_API_KEY set", bool(os.getenv("VOYAGE_API_KEY")), "create a key at dashboard.voyageai.com")
 report("VOYAGE_MODEL set", bool(os.getenv("VOYAGE_MODEL")), "pick the current model from the Voyage docs")
-report("LLM_API_KEY set", bool(os.getenv("LLM_API_KEY")), "add your LLM key")
-report("LLM_MODEL set", bool(os.getenv("LLM_MODEL")), "add the model name")
 
 for module in ("fastapi", "uvicorn", "pymongo", "httpx", "voyageai"):
     try:
