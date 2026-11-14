@@ -25,24 +25,19 @@ def _flights(route: dict) -> set:
     return {l["flight"] for l in route["legs"] if "flight" in l}
 
 
-def _find(route_id: str):
-    return next((r for r in seed("routes.json")["routes"]
-                 if r["route_id"] == route_id and not _flights(r) & _s()["cancelled"]), None)
+def _available() -> list:
+    return [r for r in seed("routes.json")["routes"] if not _flights(r) & _s()["cancelled"]]
 
 
 @app.get("/routes")
 def list_routes(origin: str, dest: str):
-    out = []
-    for r in seed("routes.json")["routes"]:
-        legs = [l for l in r["legs"] if "from" in l]
-        if legs[0]["from"] == origin and legs[-1]["to"] == dest and not _flights(r) & _s()["cancelled"]:
-            out.append(r)
-    return out
+    ends = lambda r: [l for l in r["legs"] if "from" in l]
+    return [r for r in _available() if ends(r)[0]["from"] == origin and ends(r)[-1]["to"] == dest]
 
 
 @app.post("/bookings")
 def create_booking(body: dict):
-    if not body.get("shipment_id") or not _find(body.get("route_id", "")):
+    if not body.get("shipment_id") or body.get("route_id") not in {r["route_id"] for r in _available()}:
         raise HTTPException(422, "need shipment_id and a route that is still available")
     b = {"booking_id": f"BK-{len(_s()['bookings']) + 1}", "shipment_id": body["shipment_id"],
          "route_id": body["route_id"], "status": "confirmed"}
