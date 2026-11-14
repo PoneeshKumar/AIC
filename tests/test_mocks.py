@@ -11,6 +11,7 @@ def test_reservation_idempotent_and_dropped_response():
     a = c.post("/reservations", json=RES, headers=K).json()
     assert c.post("/reservations", json=RES, headers=K).json() == a
     assert len(c.get("/reservations", params={"shipment_id": "BIO-2048"}).json()) == 1
+    assert c.get("/reservations", params={"shipment_id": "BIO-2048"}).json()[0]["idempotency_key"] == K["Idempotency-Key"]
     c.post("/admin/reset")
     c.post("/admin/faults", json={"drop_next_responses": 1})
     assert c.post("/reservations", json=RES, headers=K).status_code == 504

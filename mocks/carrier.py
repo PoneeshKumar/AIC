@@ -1,5 +1,5 @@
 """Mock carrier. Owner: MOCKS. Contract: docs/CONTRACTS.md, section "Carrier"."""
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from mocks.common import make_app, seed
 
@@ -36,10 +36,10 @@ def list_routes(origin: str, dest: str):
 
 
 @app.post("/bookings")
-def create_booking(body: dict):
+def create_booking(body: dict, request: Request):
     if not body.get("shipment_id") or body.get("route_id") not in {r["route_id"] for r in _available()}:
         raise HTTPException(422, "need shipment_id and a route that is still available")
-    b = {"booking_id": f"BK-{len(_s()['bookings']) + 1}", "shipment_id": body["shipment_id"],
+    b = {"idempotency_key": request.headers.get("Idempotency-Key"), "booking_id": f"BK-{len(_s()['bookings']) + 1}", "shipment_id": body["shipment_id"],
          "route_id": body["route_id"], "status": "confirmed"}
     _s()["bookings"].append(b)
     return b

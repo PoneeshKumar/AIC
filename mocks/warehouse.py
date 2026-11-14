@@ -1,5 +1,5 @@
 """Mock cold storage network. Owner: MOCKS. Contract: docs/CONTRACTS.md, section "Warehouse"."""
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from mocks.common import make_app, seed
 
@@ -21,13 +21,13 @@ def capacity(city: str):
 
 
 @app.post("/reservations")
-def reserve(body: dict):
+def reserve(body: dict, request: Request):
     wh = _wh().get(body.get("warehouse_id"))
     if not wh or not body.get("shipment_id"):
         raise HTTPException(422, "need shipment_id and a known warehouse_id")
     if wh["bays_free"] - [r["warehouse_id"] for r in _res()].count(wh["warehouse_id"]) <= 0:
         raise HTTPException(409, "no bays free")
-    r = {"reservation_id": f"RES-{len(_res()) + 1}", **{k: body.get(k) for k in ("shipment_id", "warehouse_id", "from", "to")}}
+    r = {"idempotency_key": request.headers.get("Idempotency-Key"), "reservation_id": f"RES-{len(_res()) + 1}", **{k: body.get(k) for k in ("shipment_id", "warehouse_id", "from", "to")}}
     _res().append(r)
     return r
 
