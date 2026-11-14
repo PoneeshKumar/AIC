@@ -1,0 +1,129 @@
+:root {
+  --bg: #f4f6f9; --panel: #ffffff; --ink: #14202e; --muted: #5b6878; --line: #dde3ea;
+  --accent: #1463d8; --accent-soft: #e6effc;
+  --ok: #137a43; --ok-soft: #e3f4ea; --warn: #9a5b00; --warn-soft: #fff3dc;
+  --bad: #b42318; --bad-soft: #fdeceb; --idle: #8a96a3; --idle-soft: #eef1f4;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e141b; --panel: #161e27; --ink: #e8eef5; --muted: #9aa8b7; --line: #2a3542;
+    --accent: #5b9dff; --accent-soft: #1b2b44;
+    --ok: #4cc785; --ok-soft: #14301f; --warn: #f0b04a; --warn-soft: #3a2b10;
+    --bad: #ff7a6e; --bad-soft: #3d1a17; --idle: #7d8a98; --idle-soft: #212b36;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif }
+h1, h2 { margin: 0 }
+h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 12px }
+main, header.top, footer { max-width: 1280px; margin: 0 auto; padding-inline: 24px }
+
+.banner { padding: 10px 24px; text-align: center; font-weight: 600 }
+.banner.preview { background: var(--accent-soft); color: var(--accent) }
+.banner.warn { background: var(--warn-soft); color: var(--warn) }
+.banner.error { background: var(--bad-soft); color: var(--bad) }
+
+header.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding-block: 20px 16px }
+.brand { display: flex; gap: 14px; align-items: center }
+.logo { font-size: 30px; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; background: var(--accent); color: #fff }
+h1 { font-size: 26px; letter-spacing: -.01em }
+.sub { margin: 2px 0 0; color: var(--muted) }
+.pill { display: inline-block; padding: 1px 10px; border-radius: 99px; background: var(--idle-soft); color: var(--muted); font-size: 13px; font-weight: 600; margin-left: 6px }
+.pill.recovering { background: var(--warn-soft); color: var(--warn) }
+.pill.delivered, .pill.recovered { background: var(--ok-soft); color: var(--ok) }
+.pill.quarantined { background: var(--bad-soft); color: var(--bad) }
+.live { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px }
+.live .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--idle) }
+.live.on .dot { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-soft) }
+.live.stale .dot { background: var(--warn) }
+.live.off .dot { background: var(--bad) }
+
+.tiles { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px; margin-bottom: 16px }
+.tile, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px }
+.tile .label { font-weight: 600; color: var(--muted) }
+.tile .value { font-size: 56px; font-weight: 750; line-height: 1.1; margin: 6px 0; font-variant-numeric: tabular-nums; letter-spacing: -.02em }
+.tile .hint { color: var(--muted); font-size: 14px }
+#budget-tile.ok .value { color: var(--ok) }
+#budget-tile.warn { background: var(--warn-soft); border-color: var(--warn) } #budget-tile.warn .value { color: var(--warn) }
+#budget-tile.bad { background: var(--bad-soft); border-color: var(--bad) } #budget-tile.bad .value { color: var(--bad) }
+#dupes-tile.zero .value { color: var(--ok) }
+#dupes-tile.some { background: var(--bad-soft); border-color: var(--bad) } #dupes-tile.some .value { color: var(--bad) }
+.bar { height: 10px; background: var(--idle-soft); border-radius: 99px; overflow: hidden; margin: 4px 0 8px }
+.bar span { display: block; height: 100%; width: 0; background: var(--ok); transition: width .4s }
+
+.chaos { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 20px; margin-bottom: 16px }
+.chaos-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap }
+.toast { font-weight: 600; color: var(--accent); font-size: 14px }
+.toast.err { color: var(--bad) }
+.buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px }
+.buttons button { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; align-items: center; text-align: left; padding: 14px 16px; border-radius: 12px;
+  border: 2px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; font: inherit; transition: border-color .15s, transform .1s }
+.buttons button:hover { border-color: var(--accent) }
+.buttons button:active { transform: scale(.98) }
+.buttons button:disabled { opacity: .55; cursor: progress }
+.buttons .ico { grid-row: span 2; font-size: 24px; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent) }
+.buttons b { font-size: 16px }
+.buttons small { color: var(--muted); font-size: 13px }
+
+.grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; margin-bottom: 16px; align-items: start }
+.side { display: grid; gap: 16px }
+.tiles > *, .grid > *, .side > *, .buttons > *, .systems > *, #steps li > * { min-width: 0 }
+.mapping td, .step .why, .log .msg { overflow-wrap: anywhere }
+
+#steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px }
+#steps li.step { display: grid; grid-template-columns: 40px 1fr auto; gap: 14px; align-items: start; padding: 14px; border-radius: 12px; border: 1px solid var(--line); transition: background .3s, border-color .3s }
+.step .num { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--idle-soft); color: var(--muted) }
+.step .what { font-weight: 600 }
+.step .why { color: var(--muted); font-size: 14px; margin-top: 2px }
+.step .chip { display: inline-block; font-size: 12px; font-weight: 600; padding: 0 8px; border-radius: 6px; background: var(--idle-soft); color: var(--muted); margin-right: 6px; text-transform: capitalize }
+.step .status { font-weight: 700; font-size: 14px; white-space: nowrap; padding: 4px 10px; border-radius: 99px; background: var(--idle-soft); color: var(--muted) }
+.step.sent { border-color: var(--warn) } .step.sent .status { background: var(--warn-soft); color: var(--warn) } .step.sent .num { background: var(--warn-soft); color: var(--warn) }
+.step.verified { background: var(--ok-soft); border-color: transparent } .step.verified .status { background: var(--ok); color: #fff } .step.verified .num { background: var(--ok); color: #fff }
+.step.failed { background: var(--bad-soft); border-color: var(--bad) } .step.failed .status { background: var(--bad); color: #fff }
+.step.skipped { opacity: .55 } .step.skipped .what { text-decoration: line-through }
+#steps .empty, #log .empty { color: var(--muted); padding: 12px 0; list-style: none }
+
+.systems { display: grid; grid-template-columns: 1fr 1fr; gap: 10px }
+.sys { border: 1px solid var(--line); border-radius: 12px; padding: 12px }
+.sys .name { font-weight: 700; display: flex; align-items: center; gap: 8px; text-transform: capitalize }
+.sys .name::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--idle) }
+.sys.ok .name::before { background: var(--ok) }
+.sys.down { background: var(--bad-soft); border-color: var(--bad) } .sys.down .name::before { background: var(--bad) }
+.sys .detail { color: var(--muted); font-size: 14px; margin-top: 4px }
+.sys .detail.flag { color: var(--warn); font-weight: 600 }
+
+.proposal { border: 2px solid var(--accent); background: var(--accent-soft) }
+.proposal h2 { color: var(--accent) }
+.proposal p { margin: 0 0 8px }
+.proposal .memory { color: var(--muted); font-size: 14px }
+.mapping { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 14px }
+.mapping th, .mapping td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line) }
+.mapping td { font-family: ui-monospace, Consolas, monospace }
+.proposal textarea { width: 100%; font: 13px ui-monospace, Consolas, monospace; border-radius: 8px; border: 1px solid var(--line); padding: 8px; background: var(--panel); color: var(--ink); margin-bottom: 10px }
+.actions { display: flex; gap: 10px }
+.actions button { font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer }
+.actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
+.error-text { color: var(--bad); font-weight: 600; min-height: 1em }
+
+.log ol { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; font-size: 15px }
+.log li { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line) }
+.log li:last-child { border-bottom: 0 }
+.log .ts { font-family: ui-monospace, Consolas, monospace; color: var(--muted); font-variant-numeric: tabular-nums }
+.log li.new { animation: flash 1.2s }
+@keyframes flash { from { background: var(--accent-soft) } to { background: transparent } }
+
+footer { color: var(--muted); font-size: 13px; padding-block: 8px 28px; text-align: center }
+
+@media (max-width: 900px) {
+  .tiles, .grid { grid-template-columns: 1fr }
+  .buttons { grid-template-columns: 1fr 1fr }
+  .tile .value { font-size: 44px }
+}
+@media (max-width: 560px) {
+  main, header.top, footer { padding-inline: 16px }
+  .buttons { grid-template-columns: 1fr }
+  #steps li.step { grid-template-columns: 32px 1fr; } .step .status { grid-column: 2; justify-self: start }
+  .step .num { width: 32px; height: 32px }
+}

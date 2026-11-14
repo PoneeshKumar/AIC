@@ -2,46 +2,102 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ColdTrace</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 1100px }
-  .row { display: flex; gap: 12px; margin-bottom: 12px }
-  .card { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 12px }
-  .big { font-size: 28px }
-  pre { background: #f5f5f5; padding: 12px; border-radius: 8px; min-height: 120px }
-</style>
+<link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
-<!-- Owner: UI. Layout target is the mockup in HANDOFF.md, "Demo screen". Plain HTML, no build step. -->
-<h2 id="shipment">Shipment</h2>
-<div class="row">
-  <div class="card">Budget remaining<div class="big" id="budget">--</div></div>
-  <div class="card">Duplicate actions<div class="big" id="dupes">--</div></div>
-  <div class="card">Steps verified<div class="big" id="verified">--</div></div>
-</div>
-<div class="row">
-  <div class="card" id="plan">Recovery plan (planned, sent, verified)</div>
-  <div class="card" id="systems">Systems (carrier, warehouse, hospital, agent)</div>
-</div>
-<div class="row">
-  <button data-event="cancel_flight">Cancel flight</button>
-  <button data-event="kill_agent">Kill agent</button>
-  <button data-event="change_carrier">Change carrier API</button>
-  <button data-event="random">Random chaos</button>
-</div>
-<pre id="log">event log</pre>
+<!-- Owner: UI. Plain HTML, no build step. Renders GET /state once a second. Add ?preview to play sample data. -->
+<div class="banner preview" id="preview-banner" hidden>Preview with sample data. Nothing here is connected to the agent or the mock systems.</div>
+<div class="banner warn" id="stale-banner" hidden></div>
+<div class="banner error" id="error-banner" hidden>Cannot reach the ColdTrace server. Retrying every second.</div>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">❄</span>
+    <div>
+      <h1>ColdTrace</h1>
+      <p class="sub">Shipment <strong id="shipment-id">--</strong> <span class="pill" id="shipment-status">connecting</span></p>
+    </div>
+  </div>
+  <div class="live" id="live"><span class="dot"></span><span id="live-text">Connecting</span></div>
+</header>
+
+<main>
+  <section class="tiles" aria-label="Key numbers">
+    <div class="tile" id="budget-tile">
+      <div class="label">Budget remaining</div>
+      <div class="value" id="budget">--</div>
+      <div class="hint">Time the shipment can still spend out of its temperature range</div>
+    </div>
+    <div class="tile" id="dupes-tile">
+      <div class="label">Duplicate actions</div>
+      <div class="value" id="dupes">--</div>
+      <div class="hint" id="dupes-hint">Counted from the warehouse and carrier, not from the agent</div>
+    </div>
+    <div class="tile">
+      <div class="label">Steps confirmed</div>
+      <div class="value" id="verified">--</div>
+      <div class="bar"><span id="verified-bar"></span></div>
+      <div class="hint">A step counts only after the other system confirms it</div>
+    </div>
+  </section>
+
+  <section class="chaos" aria-label="Chaos controls">
+    <div class="chaos-head">
+      <h2>Break something</h2>
+      <span class="toast" id="toast" role="status" aria-live="polite"></span>
+    </div>
+    <div class="buttons">
+      <button data-event="cancel_flight"><span class="ico">✈</span><b>Cancel flight</b><small>The original flight is gone</small></button>
+      <button data-event="kill_agent"><span class="ico">⏻</span><b>Kill agent</b><small>Stop it mid run, then restart</small></button>
+      <button data-event="change_carrier"><span class="ico">⇄</span><b>Change carrier API</b><small>The carrier switches format</small></button>
+      <button data-event="random"><span class="ico">⚄</span><b>Random chaos</b><small>A failure we did not pick</small></button>
+    </div>
+  </section>
+
+  <div class="grid">
+    <section class="panel plan" aria-label="Recovery plan">
+      <h2>Recovery plan</h2>
+      <ol id="steps"><li class="empty">Loading the plan</li></ol>
+    </section>
+
+    <aside class="side">
+      <section class="panel proposal" id="proposal" hidden aria-label="Proposed fix">
+        <h2>A fix needs your approval</h2>
+        <p id="proposal-summary"></p>
+        <p class="memory" id="proposal-memory"></p>
+        <table class="mapping"><thead><tr><th>Old field</th><th>New field</th></tr></thead><tbody id="proposal-map"></tbody></table>
+        <textarea id="proposal-edit" rows="5" hidden spellcheck="false"></textarea>
+        <div class="actions">
+          <button class="primary" id="approve">Approve</button>
+          <button id="correct">Correct it</button>
+        </div>
+        <p class="error-text" id="proposal-error"></p>
+      </section>
+
+      <section class="panel" aria-label="Systems">
+        <h2>Systems</h2>
+        <div class="systems" id="systems"></div>
+      </section>
+    </aside>
+  </div>
+
+  <section class="panel log" aria-label="Event log">
+    <h2>What happened</h2>
+    <ol id="log"></ol>
+  </section>
+</main>
+
+<footer>
+  The shipment, product and systems are simulated. ColdTrace quarantines and reroutes. It never decides whether a product is safe to use. A qualified person makes that call.
+</footer>
+
+<script src="/ui/app.js"></script>
 <script>
-// TODO(UI): render /state into the elements above. Poll once a second.
-async function poll() {
-  try {
-    const res = await fetch('/state')
-    if (res.ok) { document.getElementById('log').textContent = JSON.stringify(await res.json(), null, 2) }
-  } catch (e) {}
-}
-document.querySelectorAll('button[data-event]').forEach(b => {
-  b.onclick = () => fetch('/chaos/' + b.dataset.event, { method: 'POST' })
-})
-setInterval(poll, 1000)
+  if (new URLSearchParams(location.search).has('preview')) {
+    const s = document.createElement('script'); s.src = '/ui/preview.js'; s.onload = () => ColdTrace.start(); document.body.appendChild(s)
+  } else { ColdTrace.start() }
 </script>
 </body>
 </html>
