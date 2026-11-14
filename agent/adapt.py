@@ -60,8 +60,8 @@ def _ask_llm(prompt: str) -> str:
     return next(b.text for b in reply.content if b.type == "text")  # skip any thinking block
 
 
-def _llm_fix(failure: dict, matches: list[dict]) -> dict | None:
-    """Ask the model for a mapping. Returns {"fix", "reason"} or None on any failure or bad shape."""
+def _llm_fix(failure: dict, matches: list[dict]) -> dict:
+    """Ask the model for a mapping. Returns {"fix", "reason"}, or {"error": why} on any failure or bad shape."""
     recalled = [{"summary": m.get("summary"), "fix": m.get("fix"), "score": round(float(m.get("score", 0)), 3)}
                 for m in matches]
     try:
@@ -72,13 +72,13 @@ def _llm_fix(failure: dict, matches: list[dict]) -> dict | None:
         mapping = fix["map"]
         transform = fix.get("transform", {})
         if not mapping or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
-            return None
+            return {"error": "model returned a bad field map"}
         if not all(k in mapping and v in ALLOWED_TRANSFORMS for k, v in transform.items()):
-            return None
+            return {"error": "model returned a transform we do not allow"}
         return {"fix": {"map": mapping, **({"transform": transform} if transform else {})},
                 "reason": str(out.get("reason", ""))}
-    except Exception:  # no key, bad model name, network, bad JSON: fall back to the recalled fix
-        return None
+    except Exception as exc:  # no key, bad model name, rate limit, bad JSON: caller falls back and reports why
+        return {"error": f"{type(exc).__name__}: {str(exc)[:150]}"}
 
 
 def propose_fix(failure: dict) -> dict:
@@ -92,7 +92,7 @@ def propose_fix(failure: dict) -> dict:
         else None
     )
     drafted = _llm_fix(failure, matches)
-    if drafted:
+    if "fix" in drafted:
         proposal = {"summary": f"Model proposed this mapping. {drafted['reason']}".strip(), "fix": drafted["fix"],
                     "source": "llm"}
     else:
@@ -104,7 +104,10 @@ def propose_fix(failure: dict) -> dict:
             ),
             "fix": best_match.get("fix", {}) if best_match else {},
             "source": "recalled_fix",
+            "llm_error": drafted["error"],  # why the model draft was not used, so run.py and the UI can show it
         }
+        if best_match:
+            proposal["summary"] = "Model unavailable, reused the closest approved incident fix after human review"
     document = {
         "proposal_id": str(uuid.uuid4()),
         "failure": failure,

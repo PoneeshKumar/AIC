@@ -22,7 +22,19 @@ def test_llm_fix_parses_validates_and_falls_back(monkeypatch):
     assert out["fix"]["map"] == {"eta": "tracking.estimated_arrival_epoch"} and out["reason"] == "moved"
 
     monkeypatch.setattr(adapt, "_ask_llm", lambda p: '{"fix": {"map": {"eta": "x"}, "transform": {"eta": "rm_rf"}}}')
-    assert adapt._llm_fix({}, []) is None  # unknown transform is rejected
+    assert "transform" in adapt._llm_fix({}, [])["error"]  # unknown transform is rejected
 
     monkeypatch.setattr(adapt, "_ask_llm", lambda p: "not json")
-    assert adapt._llm_fix({}, []) is None
+    assert "error" in adapt._llm_fix({}, [])
+
+
+def test_propose_fix_reports_model_failure(monkeypatch):
+    import mongomock
+
+    from agent import adapt
+
+    monkeypatch.setattr(adapt, "recall", lambda q, s: [{"_id": "m1", "summary": "s", "fix": {"map": {"eta": "x.y"}}, "score": 0.9}])
+    monkeypatch.setattr(adapt, "get_db", lambda: mongomock.MongoClient()["t"])
+    out = adapt.propose_fix({"system": "carrier"})["proposal"]
+    assert out["source"] == "recalled_fix" and "no live LLM" in out["llm_error"]
+    assert out["fix"] == {"map": {"eta": "x.y"}} and "unavailable" in out["summary"]
