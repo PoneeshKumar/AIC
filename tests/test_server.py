@@ -21,7 +21,8 @@ def ui(monkeypatch):
 
 def test_state_matches_contract_without_atlas(ui):
     st = ui.get("/state").json()
-    assert set(st) == {"shipment", "counters", "steps", "systems", "proposal", "log"}
+    assert set(st) == {"shipment", "counters", "steps", "systems", "proposal", "log", "trace_url"}
+    assert st["trace_url"] is None
     assert st["shipment"] == {"shipment_id": "BIO-2048", "status": "in_transit", "budget_remaining_min": 480}
     assert st["counters"] == {"duplicate_actions": 0, "steps_verified": 0, "steps_total": 0}
     assert set(st["systems"]) == {"carrier", "warehouse", "hospital", "agent"}

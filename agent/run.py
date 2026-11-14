@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from agent import adapt, ledger, memory, planner, verify
+from agent import adapt, ledger, memory, planner, tracing, verify
 from core import config
 from core.db import ensure_indexes, get_db
 from core.models import Event, Step
@@ -155,6 +155,7 @@ def _send(step: Step) -> None:
   response.raise_for_status()
 
 
+@tracing.traced("resume_sent")
 def _resume_sent(db, run_id: str, worker_id: str) -> None:
   for step in ledger.unresolved_sent_steps(run_id):
     took_effect, evidence = verify.verify(step)
@@ -166,6 +167,7 @@ def _resume_sent(db, run_id: str, worker_id: str) -> None:
       _event(db, run_id, worker_id, "resume", f"resume found no effect for {step.action}", evidence)
 
 
+@tracing.traced("plan_if_needed")
 def _plan_if_needed(db, run: dict, shipment: dict, worker_id: str) -> None:
   run_id = run["run_id"]
   existing = list(db[config.STEPS].find({"run_id": run_id}))
@@ -210,6 +212,7 @@ def _shape(value):
   return type(value).__name__
 
 
+@tracing.traced("parse_carrier_status")
 def parse_carrier_status(db, run_id: str, worker_id: str, shipment_id: str) -> dict | None:
   """Return the normalized carrier status, or None when the run must wait for a human.
 
@@ -255,6 +258,7 @@ def parse_carrier_status(db, run_id: str, worker_id: str, shipment_id: str) -> d
   return None
 
 
+@tracing.traced("recovery_run")
 def run(shipment_id: str, worker_id: str = "worker-1") -> str:
   """Run one shipment recovery until it completes or needs a retry."""
   ensure_indexes()
@@ -265,6 +269,9 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
     raise ValueError(f"shipment not found: {shipment_id}")
   run_document = _load_run(db, shipment_id)
   run_id = run_document["run_id"]
+  trace_id = tracing.current_run_id()
+  if trace_id:
+    db[config.RUNS].update_one({"run_id": run_id}, {"$set": {"trace_id": trace_id}})
   _event(db, run_id, worker_id, "start", f"started recovery for {shipment_id}")
   _resume_sent(db, run_id, worker_id)
   try:
@@ -327,7 +334,22 @@ def main() -> None:
   parser.add_argument("--shipment", required=True)
   parser.add_argument("--worker-id", default="worker-1")
   args = parser.parse_args()
-  run(args.shipment, args.worker_id)
+  run_id = run(args.shipment, args.worker_id)
+  if tracing.enabled():
+    from chaos.invariants import check_all
+    db = get_db()
+    current_run = db[config.RUNS].find_one({"run_id": run_id}) or {}
+    if current_run.get("status") == "complete" and current_run.get("trace_id"):
+      try:
+        results = check_all(run_id, args.shipment)
+        tracing.score(current_run["trace_id"], {
+          "duplicate_actions": results["duplicate_actions"] == 0,
+          "ledger_matches_world": not results["ledger_mismatches"],
+          "budget_respected": results["budget_respected"],
+        })
+      except Exception:
+        tracing.log.warning("could not score completed run", exc_info=True)
+    tracing.flush()
 
 
 if __name__ == "__main__":

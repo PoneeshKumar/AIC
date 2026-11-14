@@ -54,6 +54,9 @@ window.ColdTrace = (() => {
       const range = net.temp_range_c ? `${net.temp_range_c[0]} to ${net.temp_range_c[1]} °C` : ''
       $('shipment-meta').textContent = [net.product, `${net.origin} to ${net.destination}`, range, net.consignee].filter(Boolean).join('  ·  ')
     }
+    const trace = $('trace-link')
+    trace.hidden = !st.trace_url
+    if (st.trace_url) trace.href = st.trace_url
   }
 
   function renderKpis(st) {
