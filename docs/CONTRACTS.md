@@ -16,6 +16,9 @@ These are the agreements between workers. If you need to change one, stop and te
 
 Field-level shapes live in `core/models.py`.
 
+Memory documents include `kind`, `system`, `summary`, `fix`, `active`,
+`superseded_by`, and an embedding. Active memories are eligible for recall.
+
 ### Step lifecycle
 
 ```

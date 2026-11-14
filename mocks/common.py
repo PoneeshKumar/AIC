@@ -41,10 +41,16 @@ def make_app(name: str) -> FastAPI:
             await asyncio.sleep(f.delay_ms / 1000)
         if request.method not in ("POST", "PUT"):
             return await call_next(request)
+        key = request.headers.get("Idempotency-Key")
+        if not key:
+            return Response(
+                json.dumps({"error": "Idempotency-Key header is required"}),
+                400,
+                media_type="application/json",
+            )
         if f.fail_next_requests > 0:  # rejected before any work
             f.fail_next_requests -= 1
             return Response(json.dumps({"error": "injected failure"}), 503, media_type="application/json")
-        key = request.headers.get("Idempotency-Key")
         cache = store.setdefault("idem", {})
         ck = (request.method, path, key)
         if key and ck in cache:  # replay the first result, create nothing

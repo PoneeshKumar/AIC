@@ -5,6 +5,19 @@ from core import config
 
 _client = None
 
+MEMORY_VECTOR_INDEX = {
+    "name": "memory_embedding",
+    "type": "vectorSearch",
+    "definition": {
+        "fields": [
+            {"type": "vector", "path": "embedding", "numDimensions": 1024, "similarity": "cosine"},
+            {"type": "filter", "path": "system"},
+            {"type": "filter", "path": "kind"},
+            {"type": "filter", "path": "active"},
+        ],
+    },
+}
+
 
 def get_db():
     global _client
@@ -22,5 +35,17 @@ def ensure_indexes():
     db[config.STEPS].create_index([("idempotency_key", ASCENDING)], unique=True)
     db[config.STEPS].create_index([("run_id", ASCENDING), ("seq", ASCENDING)])
     db[config.EVENTS].create_index([("run_id", ASCENDING), ("ts", ASCENDING)])
-    # TODO(MEMORY): create the Atlas Vector Search index on memories.embedding
-    # (filter fields: system, kind). Do this through the MongoDB MCP server or the Atlas UI.
+    db[config.WORKERS].create_index([("worker_id", ASCENDING)], unique=True)
+    ensure_memory_vector_index(db)
+
+
+def ensure_memory_vector_index(db=None):
+    """Create the Atlas Vector Search index used by memory recall when supported."""
+    if db is None:
+        db = get_db()
+    collection = db[config.MEMORIES]
+    if not hasattr(collection, "list_search_indexes"):
+        return
+    existing = list(collection.list_search_indexes())
+    if not any(index.get("name") == MEMORY_VECTOR_INDEX["name"] for index in existing):
+        collection.create_search_index(MEMORY_VECTOR_INDEX)
