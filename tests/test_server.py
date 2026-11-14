@@ -1,55 +1,100 @@
-from datetime import datetime, timezone
-
-import mongomock
+"""UI backend. Runs without Atlas: the mocks are wired in-process and Atlas is switched off."""
+import pytest
 from fastapi.testclient import TestClient
 
 from core import config
+from mocks import carrier, hospital, warehouse
 from server import app as server
 
-
-def test_state_assembles_contract(monkeypatch):
-    db = mongomock.MongoClient().coldtrace
-    now = datetime.now(timezone.utc)
-    db[config.SHIPMENTS].insert_one({
-        "shipment_id": "BIO-2048",
-        "excursion_budget_minutes": 222,
-        "updated_at": now,
-    })
-    db[config.RUNS].insert_one({
-        "run_id": "run-1",
-        "shipment_id": "BIO-2048",
-        "status": "recovering",
-        "budget_after_minutes": 180,
-        "created_at": now,
-    })
-    db[config.STEPS].insert_one({
-        "run_id": "run-1", "seq": 1, "action": "set_quarantine",
-        "system": "hospital", "status": "verified", "reason": "protect shipment",
-    })
-    db[config.EVENTS].insert_one({
-        "run_id": "run-1", "ts": now, "message": "verified quarantine",
-    })
-    monkeypatch.setattr(server, "get_db", lambda: db)
-    monkeypatch.setattr(server, "_health", lambda _: {"ok": True})
-
-    response = TestClient(server.app).get("/state")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["shipment"]["shipment_id"] == "BIO-2048"
-    assert body["counters"] == {"duplicate_actions": 0, "steps_verified": 1, "steps_total": 1}
-    assert body["steps"][0]["status"] == "verified"
-    assert body["log"][0]["message"] == "verified quarantine"
+MOCKS = {"carrier": TestClient(carrier.app), "warehouse": TestClient(warehouse.app), "hospital": TestClient(hospital.app)}
+RES = {"shipment_id": "BIO-2048", "warehouse_id": "WH-YYC-1", "from": "a", "to": "b"}
 
 
-def test_state_reports_atlas_auth_failure(monkeypatch):
-    from pymongo.errors import OperationFailure
+@pytest.fixture
+def ui(monkeypatch):
+    monkeypatch.setattr(config, "MONGODB_URI", "")
+    monkeypatch.setattr(server, "call", lambda system, method, path, **kw: MOCKS[system].request(method, path, **kw))
+    for c in MOCKS.values():
+        c.post("/admin/reset")
+    return TestClient(server.app)
 
-    monkeypatch.setattr(server, "get_db", lambda: (_ for _ in ()).throw(
-        OperationFailure("Authentication failed.")
-    ))
 
-    response = TestClient(server.app).get("/state")
+def test_state_matches_contract_without_atlas(ui):
+    st = ui.get("/state").json()
+    assert set(st) == {"shipment", "counters", "steps", "systems", "proposal", "log"}
+    assert st["shipment"] == {"shipment_id": "BIO-2048", "status": "in_transit", "budget_remaining_min": 480}
+    assert st["counters"] == {"duplicate_actions": 0, "steps_verified": 0, "steps_total": 0}
+    assert set(st["systems"]) == {"carrier", "warehouse", "hospital", "agent"}
+    assert all(st["systems"][s]["ok"] for s in ("carrier", "warehouse", "hospital"))
+    assert st["systems"]["agent"]["alive"] is False
+    assert "Atlas is not connected" in st["log"][-1]["message"]
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Atlas is unavailable. Check MONGODB_URI credentials in .env."
+
+def test_state_reports_a_down_mock(ui, monkeypatch):
+    import httpx
+
+    def down(system, method, path, **kw):
+        if system == "hospital":
+            raise httpx.ConnectError("refused")
+        return MOCKS[system].request(method, path, **kw)
+
+    monkeypatch.setattr(server, "call", down)
+    assert ui.get("/state").json()["systems"]["hospital"]["ok"] is False
+
+
+def test_carrier_schema_and_reservations_come_from_the_mocks(ui):
+    assert ui.post("/chaos/change_carrier").status_code == 200
+    MOCKS["warehouse"].post("/reservations", json=RES, headers={"Idempotency-Key": "k1"})
+    st = ui.get("/state").json()
+    assert st["systems"]["carrier"]["schema_version"] == 2
+    assert st["systems"]["warehouse"]["reservations"] == 1
+    assert st["counters"]["duplicate_actions"] == 0
+
+
+def test_duplicate_counter_sees_a_double_booking(ui):
+    for key in ("k1", "k2"):  # two different keys is exactly the bug the counter must catch
+        MOCKS["warehouse"].post("/reservations", json=RES, headers={"Idempotency-Key": key})
+    assert ui.get("/state").json()["counters"]["duplicate_actions"] == 1
+
+
+def test_cancel_flight_removes_the_direct_route(ui):
+    assert ui.post("/chaos/cancel_flight").json()["message"] == "Flight CT118 cancelled"
+    routes = MOCKS["carrier"].get("/routes", params={"origin": "YYZ", "dest": "YVR"}).json()
+    assert "R-DIRECT" not in {r["route_id"] for r in routes}
+    assert "Chaos: Flight CT118 cancelled" in [line["message"] for line in ui.get("/state").json()["log"]]
+
+
+def test_drop_response_arms_the_warehouse(ui):
+    ui.post("/chaos/drop_response")
+    assert MOCKS["warehouse"].get("/admin/faults").json()["drop_next_responses"] == 1
+
+
+def test_unbuilt_and_unknown_chaos_fail_clearly(ui):
+    assert ui.post("/chaos/kill_agent").status_code == 501
+    assert ui.post("/chaos/meteor").status_code == 404
+
+
+def test_network_follows_the_carrier_and_warehouse(ui):
+    net = ui.get("/network").json()
+    by_id = {r["route_id"]: r for r in net["routes"]}
+    assert by_id["R-DIRECT"]["status"] == "available" and by_id["R-DIRECT"]["original"]
+    assert by_id["R-YYC"]["exposed_min"] == 0, "Calgary has a free bay, so its layover is covered"
+    assert by_id["R-YWG"]["exposed_min"] == 210, "Winnipeg has no free bay"
+    assert set(net["airports"]) == {"YYZ", "YWG", "YYC", "YEG", "YVR"}
+
+    ui.post("/chaos/cancel_flight")
+    MOCKS["carrier"].post("/bookings", json={"shipment_id": "BIO-2048", "route_id": "R-YYC"}, headers={"Idempotency-Key": "b1"})
+    by_id = {r["route_id"]: r for r in ui.get("/network").json()["routes"]}
+    assert by_id["R-DIRECT"]["status"] == "cancelled"
+    assert by_id["R-YYC"]["status"] == "booked"
+
+
+def test_approve_needs_atlas(ui):
+    assert ui.post("/approve", json={"proposal_id": "0" * 24}).status_code == 503
+
+
+def test_static_ui_is_served(ui):
+    page = ui.get("/").text
+    assert "ColdTrace" in page and "/ui/app.js" in page
+    assert ui.get("/ui/app.js").status_code == 200
+    assert "never decides whether a product is safe" in page

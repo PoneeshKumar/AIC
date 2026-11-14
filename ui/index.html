@@ -4,288 +4,167 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ColdTrace</title>
-<style>
-  :root {
-    --bg: #f6f7f9; --card: #fff; --ink: #14181f; --muted: #5b6573; --line: #d9dee5;
-    --ok: #17794a; --warn: #9a6200; --bad: #b3261e; --info: #1f5fbf;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #11151b; --card: #1a2029; --ink: #eef1f5; --muted: #9aa5b4; --line: #2c3541;
-            --ok: #4cc38a; --warn: #e3a93b; --bad: #ff7b72; --info: #6ea8ff; }
-  }
-  * { box-sizing: border-box }
-  html, body { margin: 0; background: var(--bg); color: var(--ink); overflow-x: hidden }
-  body { font: 18px/1.4 system-ui, sans-serif; padding: 16px; max-width: 1200px; margin: 0 auto }
-  h1 { font-size: 24px; margin: 0 }
-  h2 { font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px }
-  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 12px }
-  #shipment-status { color: var(--muted) }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0 }
-  .grid { display: grid; gap: 12px; margin-bottom: 12px }
-  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)) }
-  .main { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) }
-  .stat .num { font-size: 40px; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere }
-  .stat .label { color: var(--muted); font-size: 14px }
-  .stat.dupes.nonzero { border-color: var(--bad) }
-  .stat.dupes.nonzero .num { color: var(--bad) }
-  .stat.dupes.zero .num { color: var(--ok) }
-  #banner { display: none; background: var(--bad); color: #fff; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px; font-weight: 600 }
-  #banner.show { display: block }
-  ol#steps { list-style: none; margin: 0; padding: 0 }
-  #steps li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: start;
-             padding: 10px 0; border-top: 1px solid var(--line) }
-  #steps li:first-child { border-top: 0 }
-  .seq { color: var(--muted); font-variant-numeric: tabular-nums }
-  .act { font-weight: 600; overflow-wrap: anywhere }
-  .sys { color: var(--muted); font-size: 14px }
-  .reason { grid-column: 2 / 4; color: var(--muted); font-size: 15px; overflow-wrap: anywhere }
-  .badge { font-size: 14px; font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap }
-  .s-planned { color: var(--muted) } .s-sent { color: var(--info) } .s-verified { color: var(--ok) }
-  .s-failed { color: var(--bad) } .s-skipped { color: var(--warn) }
-  #systems { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px }
-  .sysbox { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0 }
-  .sysbox b { display: block }
-  .sysbox .detail { color: var(--muted); font-size: 14px; overflow-wrap: anywhere }
-  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--bad) }
-  .up .dot { background: var(--ok) }
-  button { font: inherit; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
-           color: var(--ink); cursor: pointer; min-height: 44px }
-  button:hover:not(:disabled) { border-color: var(--info) }
-  button:disabled { opacity: .5; cursor: not-allowed }
-  button.primary { background: var(--info); color: #fff; border-color: var(--info) }
-  #feedback { color: var(--muted); font-size: 15px; flex-basis: 100%; min-height: 1.4em }
-  #feedback.err { color: var(--bad) }
-  #proposal { display: none; border-color: var(--info) }
-  #proposal.show { display: block }
-  #proposal pre, #fixtext { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0;
-                            white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.4 ui-monospace, monospace }
-  #fixtext { display: none; width: 100%; min-height: 120px; color: var(--ink) }
-  #fixtext.show { display: block }
-  .actions { display: flex; flex-wrap: wrap; gap: 8px }
-  #log { max-height: 320px; overflow-y: auto; font: 15px/1.5 ui-monospace, monospace; margin: 0; padding: 0; list-style: none }
-  #log li { padding: 2px 0; overflow-wrap: anywhere }
-  #log .ts { color: var(--muted); margin-right: 8px }
-  .empty { color: var(--muted) }
-  @media (max-width: 760px) {
-    body { font-size: 16px }
-    .stats { grid-template-columns: 1fr 1fr 1fr; gap: 8px }
-    .stat .num { font-size: 28px }
-    .main { grid-template-columns: minmax(0, 1fr) }
-    #systems { grid-template-columns: minmax(0, 1fr) }
-  }
-</style>
+<link rel="stylesheet" href="/ui/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
-<header>
-  <h1>ColdTrace</h1>
-  <span id="shipment-id">No shipment</span>
-  <span id="shipment-status"></span>
+<!-- Owner: UI. Plain HTML, no build step. Polls GET /state every second and GET /network every 3 seconds. Add ?preview for sample data. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-plane" viewBox="0 0 24 24"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></symbol>
+    <symbol id="i-snow" viewBox="0 0 24 24"><path d="M12 2v20"/><path d="m4.9 7 14.2 10"/><path d="m4.9 17 14.2-10"/><path d="m9 4 3 2 3-2"/><path d="m9 20 3-2 3 2"/></symbol>
+  </defs>
+</svg>
+
+<header class="appbar">
+  <div class="appbar-left">
+    <svg class="mark" aria-hidden="true"><use href="#i-snow"/></svg>
+    <span class="product">ColdTrace</span>
+    <span class="divider"></span>
+    <span class="section">Recovery console</span>
+  </div>
+  <div class="appbar-right">
+    <span class="env">Simulated environment</span>
+    <span class="live" id="live"><span class="dot"></span><span id="live-text">Connecting</span></span>
+  </div>
 </header>
 
-<div id="banner" role="alert"></div>
+<div class="notice info" id="preview-banner" hidden>Preview with sample data. Nothing on this screen is connected to the agent or the mock systems.</div>
+<div class="notice warn" id="stale-banner" hidden></div>
+<div class="notice error" id="error-banner" hidden>Cannot reach the ColdTrace server. Retrying every second.</div>
 
-<div class="grid stats">
-  <div class="card stat"><div class="label">Budget remaining</div><div class="num" id="budget">--</div></div>
-  <div class="card stat dupes zero" id="dupebox"><div class="label">Duplicate actions</div><div class="num" id="dupes">--</div></div>
-  <div class="card stat"><div class="label">Steps verified</div><div class="num" id="verified">--</div></div>
-</div>
-
-<div class="card" id="proposal" style="margin-bottom:12px">
-  <h2>Proposed fix, waiting for a person</h2>
-  <div id="prop-summary"></div>
-  <pre id="prop-fix"></pre>
-  <textarea id="fixtext" aria-label="Corrected fix as JSON" spellcheck="false"></textarea>
-  <div class="actions">
-    <button class="primary" id="approve">Approve</button>
-    <button id="correct">Correct</button>
-    <button id="submit-correct" style="display:none">Send correction</button>
-    <button id="cancel-correct" style="display:none">Cancel</button>
+<div class="context">
+  <div class="context-inner">
+    <div class="shipment">
+      <div class="shipment-line">
+        <h1 id="shipment-id">Shipment</h1>
+        <span class="badge" id="shipment-status">Loading</span>
+      </div>
+      <div class="shipment-meta" id="shipment-meta">&nbsp;</div>
+    </div>
+    <div class="scenario" role="group" aria-label="Scenario controls">
+      <span class="scenario-label">Inject failure</span>
+      <button class="btn" data-event="cancel_flight"><svg><use href="#i-plane"/></svg>Cancel flight</button>
+      <button class="btn" data-event="kill_agent"><svg><use href="#i-power"/></svg>Kill agent</button>
+      <button class="btn" data-event="change_carrier"><svg><use href="#i-swap"/></svg>Change carrier API</button>
+      <button class="btn" data-event="random"><svg><use href="#i-shuffle"/></svg>Random</button>
+    </div>
   </div>
-  <div id="prop-feedback" class="empty"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </div>
 
-<div class="grid main">
-  <div class="card"><h2>Recovery plan</h2><ol id="steps"><li class="empty">No steps yet</li></ol></div>
-  <div class="card"><h2>Systems</h2><div id="systems"></div></div>
-</div>
+<main class="layout">
+  <section class="kpis" aria-label="Key figures">
+    <div class="kpi" id="kpi-budget">
+      <div class="kpi-label">Excursion budget remaining</div>
+      <div class="kpi-value" id="budget">--</div>
+      <div class="meter"><span id="budget-meter"></span></div>
+      <div class="kpi-foot" id="budget-foot">&nbsp;</div>
+    </div>
+    <div class="kpi" id="kpi-dupes">
+      <div class="kpi-label">Duplicate actions</div>
+      <div class="kpi-value" id="dupes">--</div>
+      <div class="kpi-foot" id="dupes-foot">Counted from the warehouse and carrier</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Steps confirmed</div>
+      <div class="kpi-value" id="verified">--</div>
+      <div class="segments" id="verified-segments"></div>
+      <div class="kpi-foot">Confirmed by a separate read of each system</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Route</div>
+      <div class="kpi-value small" id="route">--</div>
+      <div class="kpi-foot" id="route-foot">&nbsp;</div>
+    </div>
+  </section>
 
-<div class="card"><h2>Event log</h2><ul id="log"><li class="empty">No events yet</li></ul></div>
+  <section class="card map-card" aria-label="Route map">
+    <div class="card-head">
+      <h2>Network</h2>
+      <div class="legend">
+        <span><i class="ln booked"></i>Booked</span>
+        <span><i class="ln avail"></i>Available</span>
+        <span><i class="ln cancelled"></i>Cancelled</span>
+        <span><i class="sq"></i>Cold storage</span>
+      </div>
+    </div>
+    <div id="map" class="map"></div>
+  </section>
 
+  <section class="card routes-card" aria-label="Route options">
+    <div class="card-head">
+      <h2>Route options</h2>
+      <div class="legend">
+        <span><i class="sw s1"></i>Cooled</span>
+        <span><i class="sw s2"></i>Exposed</span>
+      </div>
+    </div>
+    <p class="card-sub">Transit time by route. Exposed minutes use the excursion budget.</p>
+    <div id="routes-chart" class="routes-chart"></div>
+    <details class="table-view"><summary>Show as table</summary><div id="routes-table"></div></details>
+  </section>
+
+  <section class="card plan-card" aria-label="Recovery plan">
+    <div class="proposal" id="proposal" hidden>
+      <div class="proposal-head"><svg><use href="#i-alert"/></svg><span>Approval required</span></div>
+      <p class="proposal-summary" id="proposal-summary"></p>
+      <div class="proposal-match" id="proposal-match" hidden>
+        <span class="match-label">Similar past incident</span>
+        <span class="match-text" id="proposal-memory"></span>
+        <span class="match-score"><span class="meter thin"><span id="proposal-score-bar"></span></span><span id="proposal-score"></span></span>
+      </div>
+      <table class="mapping"><thead><tr><th>Field the agent expects</th><th>Where it is now</th></tr></thead><tbody id="proposal-map"></tbody></table>
+      <textarea id="proposal-edit" rows="5" hidden spellcheck="false" aria-label="Corrected mapping as JSON"></textarea>
+      <div class="proposal-actions">
+        <button class="btn primary" id="approve">Approve and store rule</button>
+        <button class="btn" id="correct">Edit mapping</button>
+        <span class="error-text" id="proposal-error"></span>
+      </div>
+    </div>
+    <div class="card-head"><h2>Recovery plan</h2><span class="card-meta" id="plan-meta"></span></div>
+    <ol class="steps" id="steps"><li class="empty">Loading</li></ol>
+  </section>
+
+  <div class="stack">
+    <section class="card burn-card" aria-label="Budget over time">
+      <div class="card-head"><h2>Budget over time</h2><span class="card-meta">Minutes remaining, this session</span></div>
+      <div id="burn-chart" class="burn-chart"></div>
+    </section>
+    <section class="card systems-card" aria-label="Connected systems">
+      <div class="card-head"><h2>Connected systems</h2></div>
+      <ul class="systems" id="systems"></ul>
+    </section>
+  </div>
+
+  <section class="card log-card" aria-label="Event log">
+    <div class="card-head"><h2>Event log</h2><span class="card-meta" id="log-meta"></span></div>
+    <div class="log-scroll" id="log-scroll"><table class="log"><tbody id="log"></tbody></table></div>
+  </section>
+</main>
+
+<footer class="foot">
+  Shipment, product and systems are simulated. ColdTrace quarantines and reroutes. It never decides whether a product is safe to use. A qualified person makes that decision.
+</footer>
+
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+<script src="/ui/vendor/leaflet/leaflet.js"></script>
+<script src="/ui/charts.js"></script>
+<script src="/ui/map.js"></script>
+<script src="/ui/app.js"></script>
 <script>
-const $ = id => document.getElementById(id)
-const STATUSES = ['planned', 'sent', 'verified', 'failed', 'skipped']
-let editing = false
-let lastProposalKey = null
-
-function mk(tag, cls, text) {
-  const e = document.createElement(tag)
-  if (cls) e.className = cls
-  if (text !== undefined) e.textContent = text
-  return e
-}
-
-function showBanner(msg) {
-  const b = $('banner')
-  b.textContent = msg || ''
-  b.classList.toggle('show', !!msg)
-}
-
-function fmtTs(ts) {
-  if (!ts) return ''
-  const m = String(ts).match(/T(\d\d:\d\d:\d\d)/)
-  return m ? m[1] : String(ts)
-}
-
-function renderSteps(steps) {
-  const ol = $('steps')
-  ol.replaceChildren()
-  if (!steps.length) { ol.append(mk('li', 'empty', 'No steps yet')); return }
-  for (const s of steps) {
-    const li = mk('li')
-    li.append(mk('span', 'seq', String(s.seq)))
-    const body = mk('div')
-    body.append(mk('div', 'act', s.action || ''), mk('div', 'sys', s.system || ''))
-    const st = STATUSES.includes(s.status) ? s.status : 'planned'
-    li.append(body, mk('span', 'badge s-' + st, s.status || 'planned'))
-    if (s.reason) li.append(mk('div', 'reason', s.reason))
-    ol.append(li)
-  }
-}
-
-function sysDetail(name, v) {
-  if (name === 'carrier' && v.schema_version != null) return 'Schema version ' + v.schema_version
-  if (name === 'warehouse' && v.reservations != null) return v.reservations + ' reservations'
-  if (name === 'agent') return v.worker ? v.worker + (v.alive ? ' is alive' : ' has stopped') : 'No worker seen'
-  return v.ok ? 'Reachable' : 'Not reachable'
-}
-
-function renderSystems(systems) {
-  const box = $('systems')
-  box.replaceChildren()
-  for (const name of ['carrier', 'warehouse', 'hospital', 'agent']) {
-    const v = systems[name] || {}
-    const up = name === 'agent' ? !!v.alive : !!v.ok
-    const d = mk('div', 'sysbox ' + (up ? 'up' : 'down'))
-    const b = mk('b')
-    b.append(mk('span', 'dot'), document.createTextNode(name[0].toUpperCase() + name.slice(1) + (up ? ' up' : ' down')))
-    d.append(b, mk('div', 'detail', sysDetail(name, v)))
-    box.append(d)
-  }
-}
-
-function renderLog(log) {
-  const ul = $('log')
-  const atBottom = ul.scrollTop + ul.clientHeight >= ul.scrollHeight - 8
-  ul.replaceChildren()
-  if (!log.length) { ul.append(mk('li', 'empty', 'No events yet')); return }
-  for (const e of log) {
-    const li = mk('li')
-    li.append(mk('span', 'ts', fmtTs(e.ts)), document.createTextNode(e.message || ''))
-    ul.append(li)
-  }
-  if (atBottom) ul.scrollTop = ul.scrollHeight
-}
-
-function proposalId(p) { return p.proposal_id || p.id || null }
-
-function renderProposal(p) {
-  const card = $('proposal')
-  if (!p) { card.classList.remove('show'); editing = false, lastProposalKey = null; return }
-  card.classList.add('show')
-  const key = JSON.stringify(p)
-  if (key === lastProposalKey) return
-  lastProposalKey = key
-  $('prop-summary').textContent = p.summary || (p.proposal && p.proposal.summary) || p.reason || 'The agent proposes a fix.'
-  const fix = p.fix !== undefined ? p.fix : (p.proposal && p.proposal.fix !== undefined ? p.proposal.fix : {})
-  $('prop-fix').textContent = JSON.stringify(fix, null, 2)
-  if (!editing) $('fixtext').value = JSON.stringify(fix, null, 2)
-}
-
-function render(s) {
-  const sh = s.shipment || {}, c = s.counters || {}
-  $('shipment-id').textContent = sh.shipment_id || 'No shipment'
-  $('shipment-status').textContent = sh.status ? 'Status: ' + sh.status : ''
-  $('budget').textContent = sh.budget_remaining_min != null ? sh.budget_remaining_min + ' min' : '--'
-  const d = c.duplicate_actions
-  $('dupes').textContent = d != null ? d : '--'
-  $('dupebox').className = 'card stat dupes ' + (d ? 'nonzero' : 'zero')
-  $('verified').textContent = (c.steps_verified ?? 0) + ' of ' + (c.steps_total ?? 0)
-  renderSteps(s.steps || [])
-  renderSystems(s.systems || {})
-  renderProposal(s.proposal)
-  renderLog(s.log || [])
-}
-
-async function poll() {
-  try {
-    const res = await fetch('/state', { cache: 'no-store' })
-    if (res.status === 503) {
-      let detail = 'Atlas is unavailable.'
-      try { detail = (await res.json()).detail || detail } catch (e) {}
-      showBanner('Atlas is down (503). ' + detail + ' The screen shows the last known state.')
-      return
-    }
-    if (!res.ok) { showBanner('State request failed with status ' + res.status + '.'); return }
-    showBanner('')
-    render(await res.json())
-  } catch (e) {
-    showBanner('Cannot reach the ColdTrace server. Retrying every second.')
-  }
-}
-
-async function readReply(res) {
-  let body = null
-  try { body = await res.json() } catch (e) {}
-  return body
-}
-
-// Approval payload: {proposal_id, decision: "approve" | "correct", approved_by: "human", fix: {...}}
-// fix is the proposal's fix as shown for approve, or the edited JSON for correct.
-const propButtons = ['approve', 'correct', 'submit-correct', 'cancel-correct'].map($)
-function setEditing(on) {
-  editing = on
-  $('fixtext').classList.toggle('show', on)
-  $('prop-fix').style.display = on ? 'none' : ''
-  $('approve').style.display = $('correct').style.display = on ? 'none' : ''
-  $('submit-correct').style.display = $('cancel-correct').style.display = on ? '' : 'none'
-}
-$('correct').onclick = () => setEditing(true)
-$('cancel-correct').onclick = () => {
-  setEditing(false)
-  lastProposalKey = null
-  $('prop-feedback').textContent = ''
-}
-
-async function sendDecision(decision) {
-  const f = $('prop-feedback')
-  let fix
-  try { fix = JSON.parse(decision === 'correct' ? $('fixtext').value : $('prop-fix').textContent) }
-  catch (e) { f.textContent = 'The fix is not valid JSON. Edit it and try again.'; return }
-  let id = null
-  try { id = proposalId(JSON.parse(lastProposalKey)) } catch (e) {}
-  propButtons.forEach(x => x.disabled = true)
-  f.textContent = 'Sending...'
-  try {
-    const res = await fetch('/approve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proposal_id: id, decision, approved_by: 'human', fix })
-    })
-    const body = await readReply(res)
-    if (res.ok) { f.textContent = decision === 'correct' ? 'Correction sent.' : 'Approval sent.'; setEditing(false) }
-    else f.textContent = 'Failed: ' + ((body && body.detail) || 'status ' + res.status)
-  } catch (e) {
-    f.textContent = 'Failed: server unreachable.'
-  } finally {
-    propButtons.forEach(x => x.disabled = false)
-    poll()
-  }
-}
-$('approve').onclick = () => sendDecision('approve')
-$('submit-correct').onclick = () => sendDecision('correct')
-
-poll()
-setInterval(poll, 1000)
+  if (new URLSearchParams(location.search).has('preview')) {
+    const s = document.createElement('script'); s.src = '/ui/preview.js'; s.onload = () => ColdTrace.start(); document.body.appendChild(s)
+  } else { ColdTrace.start() }
 </script>
 </body>
 </html>
