@@ -1,8 +1,8 @@
 # ColdTrace
 
-An agent that rescues temperature-sensitive shipments when the supply chain breaks, and can prove what it actually did.
+An agent that rescues temperature-sensitive medicine shipments when the supply chain breaks, and can prove what it actually did (built for Agents in Context Toronto, a MongoDB hackathon).
 
-Built for Agents in Context Toronto, a MongoDB hackathon. Track 3: Finish the Job.
+<img width="1470" height="800" alt="coldtrace-SS" src="https://github.com/user-attachments/assets/b197b018-bb3f-4a01-8e63-424067ec3fd5" />
 
 ## Run it
 
@@ -14,7 +14,7 @@ bash scripts/dev.sh server     # demo screen on http://localhost:8100
 bash scripts/dev.sh agent --shipment BIO-2048
 ```
 
-## Read next
+## Read First
 
 - `docs/TEAM.md`: who owns what and how we work together
 - `HANDOFF.md`: the idea, the plan, the timeline and the worker roles
