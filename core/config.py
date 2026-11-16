@@ -19,6 +19,10 @@ LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "coldtrace")
 LANGSMITH_AGENT_ID = os.getenv("LANGSMITH_AGENT_ID", "coldtrace-agent")
 LANGSMITH_AGENT_ENVIRONMENT = os.getenv("LANGSMITH_AGENT_ENVIRONMENT", "local")
 
+# Demo pacing. Both are plain knobs, set them to 0 to switch the effect off.
+AGENT_STEP_DELAY_S = float(os.getenv("AGENT_STEP_DELAY_S", "2"))              # pause between steps so the screen can be followed
+CLOCK_MINUTES_PER_SECOND = float(os.getenv("CLOCK_MINUTES_PER_SECOND", "2"))  # budget minutes burned per real second while disrupted
+
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8100"))
 CARRIER_URL = "http://localhost:" + os.getenv("CARRIER_PORT", "8101")
 WAREHOUSE_URL = "http://localhost:" + os.getenv("WAREHOUSE_PORT", "8102")

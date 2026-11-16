@@ -3,7 +3,7 @@
 Named events (each one is also a button in the UI):
   cancel_flight    -> POST carrier /admin/cancel_flight
   kill_agent       -> SIGKILL the pid in `workers`, then restart it after a pause
-  change_carrier   -> POST carrier /admin/schema {"version": 2}
+  change_carrier   -> POST carrier /admin/schema, switching between version 1 and 2
   drop_response    -> POST <system> /admin/faults {"drop_next_responses": 1}
   random           -> pick one of the above at a random moment, seeded so a run can be replayed
 
@@ -167,6 +167,16 @@ def _start_after(pid, shipment_id: str, worker_id: str) -> None:
         _queued.release()
 
 
+def _next_schema() -> int:
+    """The format the carrier is not using now, so each press switches it the other way."""
+    ship = get_db()[config.SHIPMENTS].find_one() or {}
+    try:
+        now = httpx.get(f"{config.CARRIER_URL}/shipments/{ship.get('shipment_id', '')}", timeout=5).json()
+    except (httpx.HTTPError, ValueError):
+        return 2
+    return 1 if "tracking" in now else 2
+
+
 def _drop_target() -> str:
     """The system the agent will write to next, so the dropped response is really hit and shows on screen.
 
@@ -189,8 +199,9 @@ def fire(event: str, run_id: str | None = None, **kw) -> dict:
         msg = f"chaos: flight {flight} cancelled" + (f", agent started as pid {out['agent_pid']}" if out["agent_pid"] else "")
     elif event == "change_carrier":
         # The agent only sees the new format when it runs, so start it like a cancelled flight does.
-        out = {**_post(config.CARRIER_URL + "/admin/schema", {"version": kw.get("version", 2)}), "agent_pid": wake_agent()}
-        msg = f"chaos: carrier API switched to schema v{kw.get('version', 2)}"
+        version = kw.get("version") or _next_schema()
+        out = {**_post(config.CARRIER_URL + "/admin/schema", {"version": version}), "agent_pid": wake_agent()}
+        msg = f"chaos: carrier API switched {'back ' if version == 1 else ''}to schema v{version}"
     elif event == "drop_response":
         system = kw.get("system") or _drop_target()
         out = {**_post(URLS[system] + "/admin/faults", {"drop_next_responses": 1}), "agent_pid": wake_agent()}

@@ -133,3 +133,13 @@ def test_second_press_before_the_agent_registers_starts_no_second_agent(monkeypa
     assert injector.wake_agent() and injector.wake_agent() is None  # the first one is still starting up
     time.sleep(1.2)
     assert len(spawned) == 2, "the queued start runs once the first agent has exited"
+
+
+def test_change_carrier_switches_to_the_other_format(monkeypatch):
+    from chaos import injector
+    monkeypatch.setattr(injector, "get_db", lambda: FakeDB(shipments=FakeColl([{"shipment_id": "S"}])))
+    answer = {"shipment_status": "delayed", "eta": "x"}
+    monkeypatch.setattr(injector.httpx, "get", lambda url, **kw: types.SimpleNamespace(json=lambda: answer))
+    assert injector._next_schema() == 2
+    answer = {"tracking": {}}
+    assert injector._next_schema() == 1

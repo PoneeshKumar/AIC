@@ -22,7 +22,7 @@ from pymongo.errors import PyMongoError
 from agent import adapt
 from agent import memory
 from agent import tracing
-from core import config
+from core import clock, config
 from core.db import get_db
 from mocks.common import seed
 
@@ -111,13 +111,18 @@ def _duplicates(world: dict) -> int | None:
 def _atlas(db, shipment_id: str) -> dict:
     """Shipment, latest run, steps, events, worker and pending proposal from Atlas."""
     ship = db[config.SHIPMENTS].find_one({"shipment_id": shipment_id}, {"_id": 0}) or {}
-    run = db[config.RUNS].find_one({"shipment_id": shipment_id}, sort=[("_id", -1)])
+    runs = list(db[config.RUNS].find({"shipment_id": shipment_id}).sort("_id", 1))
+    run = runs[-1] if runs else None
     run_id = (run or {}).get("run_id") or (str(run["_id"]) if run else None)
     steps = list(db[config.STEPS].find({"run_id": run_id}, {"_id": 0}).sort("seq", 1)) if run_id else []
-    events = list(db[config.EVENTS].find({"run_id": run_id}).sort("ts", -1).limit(40)) if run_id else []
+    # Every run of this shipment plus all chaos lines. Chaos is filed under whichever run was latest when the
+    # button was pressed, or under no run at all, so reading one run alone would drop those lines.
+    run_ids = [r.get("run_id") for r in runs]
+    events = list(db[config.EVENTS].find({"$or": [{"run_id": {"$in": run_ids}}, {"kind": "chaos"}]}).sort("ts", -1).limit(40))
     worker = db[config.WORKERS].find_one({}, sort=[("heartbeat", -1)])
     proposal = db["proposals"].find_one({"status": "pending"}, sort=[("_id", -1)])
-    return {"ship": ship, "run": run, "steps": steps, "events": list(reversed(events)), "worker": worker, "proposal": proposal}
+    return {"ship": ship, "run": run, "steps": steps, "events": list(reversed(events)), "worker": worker,
+            "proposal": proposal, "burned_min": clock.burned_minutes(runs)}
 
 
 def _alive(worker) -> bool:
@@ -155,6 +160,9 @@ def state():
     else:
         ship, steps, worker, proposal = atlas["ship"], atlas["steps"], atlas["worker"], atlas["proposal"]
         ship = {**ship, **_run_view(run)}
+        # The excursion clock: what the plan left, minus what has burned while the shipment was disrupted.
+        planned = ship.get("budget_remaining_min", seeded["excursion_budget_minutes"])
+        ship["budget_remaining_min"] = max(0, planned - atlas["burned_min"])
         log += [{"ts": _clock(e.get("ts")), "message": e.get("message", "")} for e in atlas["events"]]
 
     tracking = world["tracking"] or {}
@@ -187,7 +195,8 @@ def _run_view(run: dict) -> dict:
     view = {}
     status = run.get("status")
     if status == "complete":
-        view["status"] = "recovered"
+        if run.get("chosen_route_id") not in (None, "no-feasible-route"):
+            view["status"] = "recovered"  # a run that had nothing to recover leaves the shipment as it was
     elif status == "blocked":
         view["status"] = run.get("blocked_reason") or "quarantined"  # no feasible route means it stays quarantined
     elif status:
@@ -281,8 +290,11 @@ def _fallback_call(event: str) -> dict:
         call("carrier", "POST", "/admin/cancel_flight", json={"flight": flight}).raise_for_status()
         return {"event": event, "message": f"Flight {flight} cancelled"}
     if event == "change_carrier":
-        call("carrier", "POST", "/admin/schema", json={"version": 2}).raise_for_status()
-        return {"event": event, "message": "Carrier switched to its new API format"}
+        _, now = _read("carrier", f"/shipments/{_seed_shipment()['shipment_id']}")
+        version = 1 if "tracking" in (now or {}) else 2  # each press switches the format the other way
+        call("carrier", "POST", "/admin/schema", json={"version": version}).raise_for_status()
+        return {"event": event, "message": "Carrier switched to its new API format" if version == 2
+                else "Carrier switched back to its old API format"}
     if event == "drop_response":
         call("warehouse", "POST", "/admin/faults", json={"drop_next_responses": 1}).raise_for_status()
         return {"event": event, "message": "The warehouse will drop its next response"}
@@ -318,6 +330,19 @@ def chaos(event: str):
         raise HTTPException(409, f"{event} failed: {e}")
     except Exception as e:
         raise HTTPException(500, f"{event} failed: {e}")
+
+
+@app.post("/budget/reset")
+def reset_budget():
+    """Demo helper: zero the excursion clock. A run still burning keeps burning, but from now."""
+    db = _db()
+    if db is None:
+        raise HTTPException(503, "Atlas is not connected, so there is no clock to reset")
+    runs = db[config.RUNS]
+    burning = {"burn_started_at": {"$exists": True}, "burn_stopped_at": {"$exists": False}}
+    runs.update_many(burning, {"$set": {"burn_started_at": datetime.now(timezone.utc)}})
+    runs.update_many({"burn_stopped_at": {"$exists": True}}, {"$unset": {"burn_started_at": "", "burn_stopped_at": ""}})
+    return {"message": "Excursion budget timer reset"}
 
 
 def _wake_agent() -> None:

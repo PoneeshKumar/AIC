@@ -64,6 +64,8 @@ def test_carrier_schema_and_reservations_come_from_the_mocks(ui):
     assert st["systems"]["carrier"]["schema_version"] == 2
     assert st["systems"]["warehouse"]["reservations"] == 1
     assert st["counters"]["duplicate_actions"] == 0
+    assert "back to its old" in ui.post("/chaos/change_carrier").json()["message"]  # a second press switches back
+    assert ui.get("/state").json()["systems"]["carrier"]["schema_version"] == 1
 
 
 def test_duplicate_counter_sees_a_double_booking(ui):

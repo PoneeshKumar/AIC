@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
 import httpx
 
 from agent import adapt, ledger, memory, planner, tracing, verify
-from core import config
+from core import clock, config
 from core.db import ensure_indexes, get_db
 from core.models import Event, Step
 
@@ -44,15 +45,22 @@ def _heartbeat(db, worker_id: str) -> None:
 
 
 def _load_run(db, shipment_id: str) -> dict:
+  """The unfinished run if there is one, else the latest run, else a new one.
+
+  A finished run is handed back on purpose. run() only opens a new one when something new is wrong,
+  so a restart with nothing to do leaves the ledger and the screen as they were.
+  """
   run = db[config.RUNS].find_one(
     {"shipment_id": shipment_id, "$or": [
       {"status": {"$in": ["running", "recovering"]}},
       {"status": "blocked", "blocked_reason": "waiting_approval"},
     ]},
     sort=[("created_at", -1)],
-  )
-  if run:
-    return run
+  ) or db[config.RUNS].find_one({"shipment_id": shipment_id}, sort=[("created_at", -1)])
+  return run or _new_run(db, shipment_id)
+
+
+def _new_run(db, shipment_id: str) -> dict:
   run = {
     "run_id": str(uuid.uuid4()),
     "shipment_id": shipment_id,
@@ -68,6 +76,39 @@ def _response_items(response: httpx.Response, key: str) -> list[dict]:
   response.raise_for_status()
   payload = response.json()
   return payload if isinstance(payload, list) else payload.get(key, [])
+
+
+def _disrupted(shipment: dict) -> bool:
+  """True when the route the shipment is on is no longer offered by the carrier.
+
+  The route it is on is its latest booking, or its original route before any rebooking.
+  This is the only reason to plan. Without it a restart would "recover" a shipment that is fine.
+  """
+  bookings = _response_items(httpx.get(
+    f"{config.CARRIER_URL}/bookings", params={"shipment_id": shipment["shipment_id"]}, timeout=10,
+  ), "bookings")
+  current = bookings[-1].get("route_id") if bookings else shipment.get("original_route_id")
+  offered = _response_items(httpx.get(
+    f"{config.CARRIER_URL}/routes",
+    params={"origin": shipment["origin"], "dest": shipment["destination"]}, timeout=10,
+  ), "routes")
+  return current not in {route["route_id"] for route in offered}
+
+
+def _unfinished(db, run_id: str) -> int:
+  return db[config.STEPS].count_documents({"run_id": run_id, "status": {"$nin": ["verified", "skipped"]}})
+
+
+def _start_burn(db, shipment_id: str, run_id: str) -> None:
+  """Start the excursion clock for this run. See core/clock.py. Only one run of a shipment burns at a time."""
+  now = _now()
+  db[config.RUNS].update_many(
+    {"shipment_id": shipment_id, "burn_started_at": {"$exists": True}, "burn_stopped_at": {"$exists": False}},
+    {"$set": {"burn_stopped_at": now}},
+  )
+  db[config.RUNS].update_one({"run_id": run_id}, {"$set": {"burn_started_at": now}})
+  # An empty finished run that is reused for this disruption must read as recovering straight away.
+  db[config.RUNS].update_one({"run_id": run_id, "status": "complete"}, {"$set": {"status": "recovering"}})
 
 
 def _available_warehouse(route: dict) -> str | None:
@@ -198,8 +239,11 @@ def _plan_if_needed(db, run: dict, shipment: dict, worker_id: str) -> None:
     # A step failed, so the rest of the old plan no longer holds. Drop it and plan again from verified state.
     skipped = ledger.skip_planned(run_id)
     _event(db, run_id, worker_id, "plan", f"a step failed, skipped {skipped} planned steps to re-plan")
+  # Plan with what is left after the clock has run. The stored budget stays free of the burn,
+  # because the burn keeps growing and is taken off when the budget is shown.
+  burned = clock.burned_minutes(db[config.RUNS].find({"shipment_id": shipment["shipment_id"]}))
   plan = planner.solve(
-    shipment["excursion_budget_minutes"],
+    shipment["excursion_budget_minutes"] - burned,
     _route_options(shipment),
     _verified_state(db, run_id, shipment["shipment_id"]),
   )
@@ -219,7 +263,7 @@ def _plan_if_needed(db, run: dict, shipment: dict, worker_id: str) -> None:
     {"$set": {
       "status": "blocked" if plan.chosen.route_id == "no-feasible-route" else "recovering",
       "chosen_route_id": plan.chosen.route_id,
-      "budget_after_minutes": plan.budget_after_minutes,
+      "budget_after_minutes": plan.budget_after_minutes + burned,
       "updated_at": _now(),
     }},
   )
@@ -293,11 +337,19 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
   if not shipment:
     raise ValueError(f"shipment not found: {shipment_id}")
   run_document = _load_run(db, shipment_id)
+  disrupted = _disrupted(shipment)
+  if disrupted and not _unfinished(db, run_document["run_id"]) and db[config.STEPS].count_documents(
+    {"run_id": run_document["run_id"]}
+  ):
+    # That recovery is finished and the route it booked is gone again. A new disruption gets its own run.
+    run_document = _new_run(db, shipment_id)
   run_id = run_document["run_id"]
+  if disrupted and not run_document.get("burn_started_at"):
+    _start_burn(db, shipment_id, run_id)
   trace_id = tracing.current_run_id()
   if trace_id:
     db[config.RUNS].update_one({"run_id": run_id}, {"$set": {"trace_id": trace_id}})
-  _event(db, run_id, worker_id, "start", f"started recovery for {shipment_id}")
+  _event(db, run_id, worker_id, "start", f"agent started for {shipment_id}")
   _resume_sent(db, run_id, worker_id)
   try:
     carrier_status = parse_carrier_status(db, run_id, worker_id, shipment_id)
@@ -318,13 +370,23 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
     {"run_id": run_id, "blocked_reason": "waiting_approval"},
     {"$set": {"status": "recovering", "updated_at": _now()}, "$unset": {"blocked_reason": ""}},
   )
+  if not disrupted and not _unfinished(db, run_id):
+    # The route is still offered and nothing is half done. Do not plan, send or open a new run.
+    # Setting complete also restores a finished run that was reopened to wait for an approval.
+    db[config.RUNS].update_one({"run_id": run_id}, {"$set": {"status": "complete", "updated_at": _now()}})
+    _event(db, run_id, worker_id, "finish", "nothing to recover, the booked route is still offered")
+    return run_id
   _plan_if_needed(db, run_document, shipment, worker_id)
 
+  first = True
   while True:
     _heartbeat(db, worker_id)
     step = ledger.next_step(run_id, worker_id)
     if step is None:
       break
+    if not first and config.AGENT_STEP_DELAY_S:
+      time.sleep(config.AGENT_STEP_DELAY_S)  # demo pacing, see core/config.py
+    first = False
     ledger.mark_sent(step)
     _event(db, run_id, worker_id, "send", f"sent {step.action}", {"seq": step.seq})
     try:
@@ -359,9 +421,10 @@ def run(shipment_id: str, worker_id: str = "worker-1") -> str:
     if current_run.get("status") == "blocked"
     else "complete" if total and remaining == 0 else "recovering"
   )
-  db[config.RUNS].update_one(
-    {"run_id": run_id}, {"$set": {"status": status, "updated_at": _now()}}
-  )
+  update = {"status": status, "updated_at": _now()}
+  if status == "complete" and current_run.get("burn_started_at") and not current_run.get("burn_stopped_at"):
+    update["burn_stopped_at"] = _now()  # recovery is verified, so the excursion clock stops
+  db[config.RUNS].update_one({"run_id": run_id}, {"$set": update})
   _event(db, run_id, worker_id, "finish", f"recovery {status}")
   return run_id
 

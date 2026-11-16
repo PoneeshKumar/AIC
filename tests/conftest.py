@@ -10,6 +10,15 @@ def no_live_llm(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_demo_pacing(monkeypatch):
+    """The step pause and the scaled clock are for the screen. Tests that want the clock turn it on."""
+    from core import config
+
+    monkeypatch.setattr(config, "AGENT_STEP_DELAY_S", 0)
+    monkeypatch.setattr(config, "CLOCK_MINUTES_PER_SECOND", 0)
+
+
+@pytest.fixture(autouse=True)
 def no_real_agent(monkeypatch):
     """Approving a proposal starts the agent. Tests must never spawn one or read the real cluster."""
     from chaos import injector
